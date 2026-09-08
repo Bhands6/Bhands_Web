@@ -1,0 +1,30 @@
+{
+  "name": "bhandsmusic-server",
+  "version": "1.0.0",
+  "description": "BhandsMusic Web 后端服务",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@fastify/cors": "^8.0.0",
+    "@fastify/static": "^6.0.0",
+    "@unblockneteasemusic/server": "^0.28.0",
+    "axios": "^1.18.1",
+    "fastify": "^4.0.0",
+    "NeteaseCloudMusicApi": "^4.32.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsx": "^3.14.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

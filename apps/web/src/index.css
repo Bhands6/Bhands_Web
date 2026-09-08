@@ -1,0 +1,293 @@
+/* ==================== Web 版补充样式 ==================== */
+/* desktop.css 完整移植自桌面版，这里只补充 Web 舞台需要的少量样式 */
+
+#root {
+  height: 100%;
+}
+
+/* ---------- 舞台歌词（桌面版由 JS 内联驱动，Web 版用类实现）---------- */
+#stage-lyrics {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /* 高于常规 UI（控制栏 6 / 顶栏·搜索 10 / 视觉控制台 18 / 沉浸控制栏 30），
+     低于队列面板 42、登录弹窗 50 与启动页 300 */
+  z-index: 40;
+  /* 左右加宽：长歌词也能单行放下（原 860px 偏窄导致频繁折行） */
+  width: min(1600px, 94vw);
+  /* 边界扩大：大字号歌词（视觉控制台可调至 1.65x）不再被裁切 */
+  max-height: 78vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.8vh, 20px);
+  perspective: 800px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .8s ease;
+  padding: 24px 0;
+  mask-image: linear-gradient(180deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+#stage-lyrics.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 单行模式：只显示当前行，长句强制单行不折行（JS 测量溢出后经 --single-fit 等比缩小塞进一行） */
+#stage-lyrics.single {
+  max-height: none;
+  mask-image: none;
+  -webkit-mask-image: none;
+  padding: 0;
+}
+#stage-lyrics.single .stage-lyric-line {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  max-width: 100%;
+  font-size: calc(clamp(22px, 3.4vw, 42px) * var(--lyric-scale, 1));
+}
+#stage-lyrics.single .stage-lyric-line.current .sll-text {
+  transform: scale(calc(var(--single-fit, 1) * (1 + var(--beat-glow, 0) * 0.022 + var(--lyric-sun, 0) * 0.018)));
+}
+/* Home 视图可见时隐藏舞台歌词（避免叠在 Home 卡片上；数据仍同步，切回舞台即恢复） */
+body.empty-home-active #stage-lyrics {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* 基础行：尺寸/字重/字间距由视觉控制台变量驱动 */
+.stage-lyric-line {
+  position: relative;
+  font-size: calc(clamp(20px, 3.2vw, 40px) * var(--lyric-scale, 1));
+  font-weight: var(--lyric-weight, 700);
+  letter-spacing: var(--lyric-letter-spacing, .04em);
+  line-height: 1.35;
+  color: rgba(255, 255, 255, .58);
+  text-align: center;
+  max-width: 100%;
+  cursor: pointer;
+  transform: translateZ(0) scale(.86);
+  transform-origin: center;
+  transition: color .45s ease, transform .45s cubic-bezier(.16, 1, .3, 1),
+    opacity .45s ease, filter .45s ease;
+  filter: blur(.6px);
+  opacity: .82;
+  /* 与同色系粒子背景分离的深色衬底 */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .45), 0 0 10px rgba(0, 0, 0, .28);
+  /* 长句自动换行显示完整，不再截断省略 */
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  padding: 2px 12px;
+  /* 新行进入视窗时淡入（按 index key 挂载的新 DOM 会触发） */
+  animation: lyric-line-in .6s cubic-bezier(.16, 1, .3, 1);
+}
+@keyframes lyric-line-in {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    transform: translateY(18px) scale(.92);
+  }
+}
+.stage-lyric-line:hover {
+  color: rgba(255, 255, 255, .64);
+}
+.stage-lyric-line.near {
+  opacity: .95;
+  transform: translateZ(0) scale(.93);
+  filter: blur(.2px);
+}
+.stage-lyric-line.current {
+  color: var(--stage-lyric-hl, var(--stage-lyric-color, #fff));
+  opacity: 1;
+  filter: blur(0);
+  transform: translateZ(46px) scale(1);
+}
+/* 行内文字层：节拍溢光 + 微呼吸（--beat-glow / --lyric-sun 由 StageLyrics rAF 写入）
+   独立短过渡，跟随音频帧而非状态切换的 .45s */
+.sll-text {
+  display: inline-block;
+  transition: text-shadow .12s ease, transform .12s ease;
+}
+.stage-lyric-line.current .sll-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6),
+    0 0 9px rgba(0, 0, 0, .4),
+    0 0 calc((34px + 26px * var(--beat-glow, 0)) * var(--lyric-glow-strength, 1)) var(--stage-lyric-glow, rgba(157, 184, 207, .55)),
+    0 2px 26px rgba(0, 0, 0, .35);
+  transform: scale(calc(1 + var(--beat-glow, 0) * 0.022 + var(--lyric-sun, 0) * 0.018));
+}
+/* 阳光溢光：副歌/高能段落在当前行后方浮现的柔光（对应桌面版 lyric sun 效果） */
+.stage-lyric-line.current::after {
+  content: '';
+  position: absolute;
+  inset: -55% -12%;
+  background: radial-gradient(closest-side, var(--stage-lyric-glow, rgba(157, 184, 207, .5)), transparent 72%);
+  filter: blur(28px);
+  opacity: calc(var(--lyric-sun, 0) * 0.55);
+  pointer-events: none;
+  z-index: -1;
+}
+body.beat-pulse .stage-lyric-line.current .sll-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6),
+    0 0 9px rgba(0, 0, 0, .4),
+    0 0 calc((46px + 20px * var(--beat-glow, 0)) * var(--lyric-glow-strength, 1)) var(--stage-lyric-glow, rgba(157, 184, 207, .8)),
+    0 2px 26px rgba(0, 0, 0, .35);
+}
+/* 歌词纯色模式（视觉控制台「歌词颜色」自定义）：当前行用自定义色 */
+body.lyric-custom-color .stage-lyric-line.current {
+  color: var(--lyric-custom-color, #a9b8c8);
+}
+.stage-lyric-empty {
+  font-size: 13px;
+  letter-spacing: .5px;
+  color: rgba(255, 255, 255, .22);
+  pointer-events: none;
+}
+
+/* ---------- 搜索结果播放态图标 ---------- */
+.search-result .play-state {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(var(--fc-accent-rgb), .6);
+  border-top-color: transparent;
+  animation: sr-spin .8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes sr-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- 登录二维码 ---------- */
+.qr-shell img {
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
+#qr-status {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .55);
+  letter-spacing: .5px;
+  min-height: 18px;
+}
+
+/* ---------- Home 卡片空封面占位 ---------- */
+.home-card-art:not(.has-cover)::before {
+  content: '';
+  position: absolute;
+  inset: 16px;
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 10px rgba(5, 5, 8, .4);
+  background: radial-gradient(circle at 32% 30%, rgba(255, 255, 255, .1), transparent 55%);
+}
+
+/* ---------- 队列空态 ---------- */
+.queue-empty {
+  padding: 22px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .35);
+  letter-spacing: .4px;
+}
+
+/* ---------- 歌单卡片封面 ---------- */
+.pl-card-cover {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, .05);
+}
+.pl-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.pl-card-name {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, .9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+.pl-card-meta {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, .38);
+}
+.pl-card-count {
+  font-size: 10.5px;
+  color: rgba(var(--fc-accent-rgb), .7);
+  flex-shrink: 0;
+}
+
+/* ---------- 细滚动条 ---------- */
+#search-results::-webkit-scrollbar,
+#playlist-panel::-webkit-scrollbar,
+#stage-lyrics::-webkit-scrollbar {
+  width: 4px;
+}
+#search-results::-webkit-scrollbar-thumb,
+#playlist-panel::-webkit-scrollbar-thumb {
+  background: rgba(var(--fc-accent-rgb), .2);
+  border-radius: 4px;
+}
+
+/* ---------- 上传按钮提示 ---------- */
+#upload-tip {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  width: 220px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(12, 12, 18, .92);
+  border: 1px solid rgba(255, 255, 255, .08);
+  backdrop-filter: blur(30px);
+  font-size: 11px;
+  color: rgba(255, 255, 255, .6);
+  line-height: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition: opacity .25s, transform .25s;
+  z-index: 30;
+}
+#upload-tip.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.upload-tip-title {
+  display: block;
+  color: rgba(var(--fc-accent-rgb), .85);
+  font-weight: 650;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+}
+.upload-tip-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: 0;
+  color: rgba(255, 255, 255, .4);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ---------- Web 隐藏桌面专用元素 ---------- */
+#desktop-titlebar,
+#fullscreen-diy-zone,
+#fullscreen-window-controls {
+  display: none !important;
+}

@@ -1,0 +1,31 @@
+services:
+  bhandsmusic:
+    build: .
+    container_name: bhandsmusic-web
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - HOST=0.0.0.0
+    restart: unless-stopped
+
+  # HTTPS 反向代理（备案通过后启用：docker compose --profile caddy up -d）
+  caddy:
+    image: caddy:alpine
+    container_name: bhandsmusic-caddy
+    profiles: ["caddy"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs/bhands.icu_nginx:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - bhandsmusic
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

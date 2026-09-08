@@ -1,0 +1,26 @@
+{
+  "name": "bhandsmusic-web",
+  "version": "1.0.0",
+  "description": "BhandsMusic Web - 沉浸式在线音乐播放器",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:server\"",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:server": "npm run dev --workspace=apps/server",
+    "build": "npm run build --workspaces",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:server": "npm run build --workspace=apps/server",
+    "start": "npm run start --workspace=apps/server",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  }
+}

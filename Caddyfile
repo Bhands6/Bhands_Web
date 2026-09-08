@@ -1,0 +1,40 @@
+# Bhands Music — Caddy 反向代理配置
+# 使用腾讯云下载的证书（certs/bhands.icu_nginx/，docker-compose 挂载到 /certs）
+# 用法：docker compose --profile caddy up -d
+
+bhands.icu {
+	# 腾讯云签发的证书（一年有效，到期后在 SSL 控制台重新下载替换）
+	tls /certs/bhands.icu_bundle.crt /certs/bhands.icu.key
+
+	# 压缩响应
+	encode gzip zstd
+
+	# 音频流代理需要支持 Range 断点续传（拖动进度条），Caddy 默认支持
+	reverse_proxy bhandsmusic:3001 {
+		# 流式传输（音频/歌词接口长连接）
+		flush_interval -1
+	}
+
+	header {
+		# HSTS：强制浏览器后续走 HTTPS
+		Strict-Transport-Security "max-age=31536000"
+		# 隐私相关 header 精简
+		-X-Powered-By
+	}
+
+	# 已有缓存策略的静态资源（带 hash 的 /assets/*）延长缓存
+	@hashed path /assets/*
+	header @hashed Cache-Control "public, max-age=3600"
+
+	log {
+		output file /data/access.log {
+			roll_size 50MB
+			roll_keep 3
+		}
+	}
+}
+
+# www 无独立证书，仅 HTTP 80 重定向到主域名（HTTPS 由主域名承接）
+http://www.bhands.icu {
+	redir https://bhands.icu{uri} permanent
+}
