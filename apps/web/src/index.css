@@ -53,10 +53,16 @@
 #stage-lyrics.single .stage-lyric-line.current .sll-text {
   transform: scale(calc(var(--single-fit, 1) * (1 + var(--beat-glow, 0) * 0.022 + var(--lyric-sun, 0) * 0.018)));
 }
-/* Home 视图可见时隐藏舞台歌词（避免叠在 Home 卡片上；数据仍同步，切回舞台即恢复） */
-body.empty-home-active #stage-lyrics {
-  opacity: 0 !important;
-  pointer-events: none !important;
+/* Home 视图可见时：主页层级高于歌词（歌词仍在后台同步数据，切回舞台即恢复） */
+body.empty-home-active #app-stage > section {
+  position: relative;
+  z-index: 41;
+}
+/* 搜索栏 + 控制栏始终在主页之上 */
+body.empty-home-active #search-area,
+body.empty-home-active #bottom-bar,
+body.empty-home-active #bottom-handle {
+  z-index: 42;
 }
 /* 基础行：尺寸/字重/字间距由视觉控制台变量驱动 */
 .stage-lyric-line {
@@ -288,6 +294,8 @@ body.lyric-custom-color .stage-lyric-line.current {
 /* ---------- Web 隐藏桌面专用元素 ---------- */
 #desktop-titlebar,
 #fullscreen-diy-zone,
+#fullscreen-diy-zone,
 #fullscreen-window-controls {
   display: none !important;
 }
+

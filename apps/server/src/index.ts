@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { musicRoutes } from './routes/music';
+import { loadPersistedScripts } from './services/music-sources/lxMusicRunner';
 import { userRoutes } from './routes/user';
 import { weatherRoutes } from './routes/weather';
 
@@ -77,6 +78,9 @@ async function main() {
     const host = process.env.HOST || '0.0.0.0';
     await server.listen({ port, host });
     console.log(`Server is running on http://${host}:${port}`);
+
+    // 启动时加载已持久化的 LX Music 脚本
+    loadPersistedScripts().then((n) => { if (n) console.log(`[LxMusic] 已加载 ${n} 个持久化脚本`); }).catch(() => {});
   } catch (err) {
     server.log.error(err);
     process.exit(1);

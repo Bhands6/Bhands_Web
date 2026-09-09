@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import { userApi, UserInfo, UserPlaylistItem } from '../api/user';
+import { usePlayerStore } from './usePlayerStore';
+import { useLyricsStore } from './useLyricsStore';
+import { useSearchStore } from './useSearchStore';
+import { usePlaylistStore } from './usePlaylistStore';
+import { useSettingsStore } from './useSettingsStore';
+import { useUIStore } from './useUIStore';
+import { useHistoryStore } from './useHistoryStore';
+import { useFavoritesStore } from './useFavoritesStore';
 
 interface UserState {
   user: UserInfo | null;
@@ -85,6 +93,32 @@ export const useUserStore = create<UserState>((set) => ({
     try {
       await userApi.logout();
     } finally {
+      // 停止播放、清空队列与会话快照
+      usePlayerStore.getState().clearPlaylist();
+      // 清空歌词
+      useLyricsStore.getState().clearLyrics();
+      // 清空搜索结果
+      useSearchStore.getState().clearResults();
+      // 清空歌单详情
+      usePlaylistStore.getState().clearCurrentPlaylist();
+      // 清空播放历史
+      useHistoryStore.getState().clearHistory();
+      // 清空收藏
+      useFavoritesStore.getState().clearFavorites();
+      // 重置视觉设置为默认值（恢复首次加载的粒子样式）
+      useSettingsStore.getState().resetAll();
+      useUIStore.setState({
+        homeVisible: true,
+        queuePanelOpen: false,
+        queuePanelPeek: false,
+        queuePanelPinned: false,
+        queueTab: 'queue',
+        loginModalOpen: false,
+        immersive: false,
+        controlsHidden: false,
+        lyricsVisible: true,
+      });
+      document.body.classList.remove('immersive-mode','controls-visible','beat-pulse');
       set({ user: null, loggedIn: false, playlists: [] });
     }
   },

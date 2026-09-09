@@ -850,6 +850,7 @@ export default function ParticleStage() {
         coverTex.needsUpdate = true;
         rebuildEdgeTexture(img);
         uniforms.uHasCover.value = 1;
+        uniforms.uEdgeEnabled.value = 1;
         uniforms.uColorMixT.value = 0;
         uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value as number, 0.12);
       };
@@ -859,8 +860,28 @@ export default function ParticleStage() {
       img.src = url;
     };
 
+    const clearCover = () => {
+      lastCoverUrl = '';
+      coverCtx.fillStyle = '#1c1c28';
+      coverCtx.fillRect(0, 0, COVER_TEX_SIZE, COVER_TEX_SIZE);
+      coverTex.needsUpdate = true;
+      prevCoverCtx.fillStyle = '#1c1c28';
+      prevCoverCtx.fillRect(0, 0, COVER_TEX_SIZE, COVER_TEX_SIZE);
+      prevCoverTex.needsUpdate = true;
+      edgeCtx.fillStyle = 'rgba(128,0,0,255)';
+      edgeCtx.fillRect(0, 0, EDGE_TEX_SIZE, EDGE_TEX_SIZE);
+      edgeTex.needsUpdate = true;
+      uniforms.uHasCover.value = 0;
+      uniforms.uEdgeEnabled.value = 0;
+      uniforms.uColorMixT.value = 1;
+    };
+
     const checkCover = (url?: string) => {
-      if (!url || url === lastCoverUrl) return;
+      if (!url) {
+        if (lastCoverUrl) clearCover();
+        return;
+      }
+      if (url === lastCoverUrl) return;
       lastCoverUrl = url;
       loadCover(url);
     };

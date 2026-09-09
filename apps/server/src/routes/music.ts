@@ -1,7 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import NcmApiDefault from 'NeteaseCloudMusicApi';
-import unblockMatch from '@unblockneteasemusic/server';
+import { resolveSongUrl } from '../services/musicParser';
+import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners } from '../services/music-sources/lxMusicRunner';
 import { getNeteaseCookie } from '../neteaseSession';
 
 // NCM 自带类型过于严格（body 字段均为 unknown），路由层按宽松类型调用
@@ -41,63 +42,6 @@ const QUALITY_LEVEL: Record<string, string> = {
   exhigh: 'exhigh',
   standard: 'standard'
 };
-
-const UNBLOCK_PLATFORMS = ['migu', 'kugou', 'kuwo', 'pyncmd'];
-
-/** 外站音源包装为同源代理地址
- *  前端 Web Audio 频谱分析要求音频元素 crossOrigin=anonymous，
- *  而酷狗/酷我等平台 CDN 不返回 CORS 头，直连会被浏览器拦截。
- *  返回相对路径，dev 经 Vite 代理、生产同源部署，均无跨域问题。 */
-function proxyAudioUrl(url: string): string {
-  if (!/^https?:\/\//i.test(url)) return url;
-  return `/api/music/stream?url=${encodeURIComponent(url)}`;
-}
-
-/** 从其它平台（咪咕/酷狗/酷我等）解析完整音源，失败返回 null
- *  minSize: 最小文件体积（字节），过滤平台返回的十几秒预览片段
- *  timeout: 探测超时（毫秒），避免切歌长时间卡在平台匹配上 */
-async function tryUnblockFullTrack(id: string, minSize = 0, timeout = 0, cookie = ''): Promise<{
-  url: string;
-  quality: string;
-  trial: boolean;
-  size: number;
-} | null> {
-  const doMatch = (async () => {
-    try {
-      const detail = await NcmApi.song_detail({ ids: id, cookie });
-      const s = detail.body?.songs?.[0];
-      if (!s) return null;
-
-      const matched: any = await unblockMatch(Number(id), UNBLOCK_PLATFORMS, {
-        name: s.name || '',
-        artists: (s.ar || []).map((a: any) => ({ name: a.name })),
-        album: { name: (s.al || {}).name || '' }
-      });
-      if (matched?.url) {
-        const size = matched.size || 0;
-        // 体积过小的匹配多为预览片段；有 minSize 要求时不达标视为无效
-        if (minSize > 0 && size > 0 && size < minSize) return null;
-        return {
-          url: matched.url,
-          quality: 'unblock',
-          trial: false,
-          size
-        };
-      }
-    } catch {
-      // unblock 失败不影响主流程
-    }
-    return null;
-  })();
-
-  if (timeout > 0) {
-    return Promise.race([
-      doMatch,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout))
-    ]);
-  }
-  return doMatch;
-}
 
 export async function musicRoutes(fastify: FastifyInstance) {
   // 音频流代理：转发外站音源为同源响应，透传 Range 头以支持拖动进度条
@@ -178,58 +122,67 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 获取歌曲播放链接（网易云直链 → UnblockNeteaseMusic 灰色歌曲兜底）
+  // 获取歌曲播放链接（VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方）
   fastify.get('/song/:id/url', async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
-    const { quality = 'exhigh' } = request.query as { quality?: string };
-    const level = QUALITY_LEVEL[quality] || 'exhigh';
+    const { quality = 'exhigh', vip } = request.query as { quality?: string; vip?: string };
+    const cookie = getNeteaseCookie(request);
 
     try {
-      const cookie = getNeteaseCookie(request);
-      const res = await NcmApi.song_url_v1({ id, level, cookie });
-      const info = res.body?.data?.[0];
-
-      if (info?.url) {
-        // 完整音源：直接返回
-        if (!info.freeTrialInfo) {
-          return {
-            success: true,
-            data: {
-              url: proxyAudioUrl(info.url),
-              quality,
-              trial: false,
-              size: info.size || 0
-            }
-          };
-        }
-
-        // 试听片段（VIP/付费曲，未登录或无会员）→ 限时 5 秒探测其它平台完整音源（≥1MB），超时/失败回退试听
-        const unblocked = await tryUnblockFullTrack(id, 1_000_000, 5_000, cookie);
-        if (unblocked) {
-          return { success: true, data: { ...unblocked, url: proxyAudioUrl(unblocked.url) } };
-        }
-        return {
-          success: true,
-          data: {
-            url: proxyAudioUrl(info.url),
-            quality,
-            trial: true,
-            size: info.size || 0
-          }
-        };
+      const result = await resolveSongUrl({
+        id, name: '', artists: [], quality,
+        vip: vip === 'true' || vip === '1',
+        cookie
+      });
+      if (result) {
+        return { success: true, data: result };
       }
-
-      // 无直链（灰色/版权下架）→ 从其它平台匹配
-      const unblocked = await tryUnblockFullTrack(id, 0, 0, cookie);
-      if (unblocked) {
-        return { success: true, data: { ...unblocked, url: proxyAudioUrl(unblocked.url) } };
-      }
-
       return reply.status(404).send({ success: false, error: '暂无可用播放源' });
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ success: false, error: '解析播放地址失败' });
     }
+  });
+
+  // ---- LX Music 脚本管理 ----
+
+  // 上传 LX Music 脚本
+  fastify.post('/parse/lx/upload', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { script, name } = request.body as { script?: string; name?: string };
+    if (!script) return reply.status(400).send({ success: false, error: '缺少脚本内容' });
+    const scriptId = 'lx_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const scriptName = name || 'LX Music 脚本 ' + scriptId;
+    try {
+      const runner = await initRunner(scriptId, script, scriptName, true);
+      if (runner) {
+        return { success: true, id: scriptId, name: scriptName, sources: runner.getAvailableSourceKeys() };
+      }
+      return reply.status(400).send({ success: false, error: '脚本执行失败，未导出有效音源' });
+    } catch (err: any) {
+      return reply.status(500).send({ success: false, error: err.message });
+    }
+  });
+
+  // 获取脚本列表
+  fastify.get('/parse/lx/list', async () => {
+    return { success: true, data: listLxRunners() };
+  });
+
+  // 激活脚本
+  fastify.post('/parse/lx/activate', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.body as { id?: string };
+    if (!id || !setActiveRunner(id)) {
+      return reply.status(404).send({ success: false, error: '脚本不存在' });
+    }
+    return { success: true };
+  });
+
+  // 删除脚本
+  fastify.post('/parse/lx/delete', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.body as { id?: string };
+    if (!id) return reply.status(400).send({ success: false, error: '缺少脚本 ID' });
+    removeRunner(id);
+    return { success: true };
   });
 
   // 获取歌词

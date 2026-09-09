@@ -6,6 +6,7 @@ interface PlayerState {
   // 播放状态
   currentTrack: AudioTrack | null;
   isPlaying: boolean;
+  playingQuality: string;
   currentTime: number;
   duration: number;
   volume: number;
@@ -48,6 +49,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // 初始状态
   currentTrack: null,
   isPlaying: false,
+  playingQuality: '',
   currentTime: 0,
   duration: 0,
   volume: 1,
@@ -214,6 +216,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentIndex: -1,
       currentTrack: null,
       isPlaying: false,
+      playingQuality: '',
       currentTime: 0,
       duration: 0
     });

@@ -42,7 +42,8 @@ export default function StageLyrics() {
     const loop = () => {
       if (disposed) return;
       raf = requestAnimationFrame(loop);
-      if (document.hidden) return;
+      // 标签页隐藏 或 Home 页可见时跳过计算（歌词被 CSS 隐藏，无需驱动溢光）
+      if (document.hidden || useUIStore.getState().homeVisible) return;
 
       const { analyserData, isPlaying } = usePlayerStore.getState();
       if (isPlaying) {

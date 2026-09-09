@@ -19,6 +19,18 @@ const QUALITY_OPTIONS: { key: PlayQuality; label: string; note: string }[] = [
   { key: 'standard', label: '标准', note: '128kbps' }
 ];
 
+/** 实际播放音质 → 友好显示 */
+function formatPlayingQuality(q: string): string {
+  if (!q) return '';
+  const pill = QUALITY_PILL[q as PlayQuality];
+  if (pill) return pill;
+  if (q.startsWith('gdmusic')) return 'GD';
+  if (q.startsWith('lx')) return 'LX';
+  if (q === 'unblock') return 'UC';
+  if (q.startsWith('netease-')) return QUALITY_PILL[q.replace('netease-', '') as PlayQuality] || q.replace('netease-', '').toUpperCase();
+  return q.toUpperCase();
+}
+
 const QUALITY_PILL: Record<PlayQuality, string> = {
   jymaster: '母带',
   hires: '臻音',
@@ -55,6 +67,7 @@ export default function ControlBar() {
   const controlsAutoHide = useUIStore((s) => s.controlsAutoHide);
   const toggleControlsAutoHide = useUIStore((s) => s.toggleControlsAutoHide);
   const quality = useUIStore((s) => s.quality);
+  const playingQuality = usePlayerStore((s) => s.playingQuality);
   const setQuality = useUIStore((s) => s.setQuality);
   const showToast = useUIStore((s) => s.showToast);
   const setQueuePanelOpen = useUIStore((s) => s.setQueuePanelOpen);
@@ -264,7 +277,7 @@ export default function ControlBar() {
                 title="播放音质"
                 style={{ fontSize: '11.5px', fontWeight: 800, letterSpacing: '.5px' }}
               >
-                <span>{QUALITY_PILL[quality]}</span>
+                <span>{playingQuality ? formatPlayingQuality(playingQuality) : QUALITY_PILL[quality]}</span>
               </button>
               <div className="quality-popover" onClick={(e) => e.stopPropagation()}>
                 {QUALITY_OPTIONS.map((opt) => (

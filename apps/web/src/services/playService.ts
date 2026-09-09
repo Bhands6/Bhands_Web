@@ -5,6 +5,7 @@ import { usePlaylistStore } from '../stores/usePlaylistStore';
 import { useLyricsStore } from '../stores/useLyricsStore';
 import { useHistoryStore } from '../stores/useHistoryStore';
 import { useUIStore } from '../stores/useUIStore';
+import { useUserStore } from '../stores/useUserStore';
 
 /** SongItem(搜索结果) → AudioTrack(播放器) */
 export function songItemToTrack(song: SongItem): AudioTrack {
@@ -20,20 +21,17 @@ export function songItemToTrack(song: SongItem): AudioTrack {
   };
 }
 
-/** 带音质降级地解析播放地址：请求音质 → exhigh → standard */
-async function resolveTrackUrl(id: string): Promise<{ url: string; trial?: boolean } | null> {
+/** 解析播放地址（服务端 VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方） */
+async function resolveTrackUrl(id: string): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
   const { quality } = useUIStore.getState();
-  const candidates = quality === 'exhigh' ? ['exhigh', 'standard'] : [quality, 'exhigh', 'standard'];
-
-  for (const q of candidates) {
-    try {
-      const response = await musicApi.getSongUrl(id, q);
-      if (response.success && response.data?.url) {
-        return { url: response.data.url, trial: response.data.trial };
-      }
-    } catch {
-      // 尝试下一档
+  const { loggedIn } = useUserStore.getState();
+  try {
+    const response = await musicApi.getSongUrl(id, quality, loggedIn);
+    if (response.success && response.data?.url) {
+      return { url: response.data.url, trial: response.data.trial, quality: response.data.quality };
     }
+  } catch {
+    // 解析失败
   }
   return null;
 }
@@ -189,6 +187,7 @@ export async function playTrack(
   // 已有可直连地址直接播放，否则（含旧版持久化的平台直链）重新解析
   let url = isDirectPlayableUrl(track.url) ? track.url : '';
   let trial = false;
+  usePlayerStore.setState({ playingQuality: track.resolvedQuality || '' });
   if (!url) {
     const resolved = await resolveTrackUrl(track.id);
     if (token !== playToken) return; // 已被更新的播放请求取代
@@ -198,12 +197,13 @@ export async function playTrack(
     }
     url = resolved.url;
     trial = !!resolved.trial;
+    if (resolved.quality) usePlayerStore.setState({ playingQuality: resolved.quality });
   }
   if (trial) {
     showToast('当前仅试听片段，登录后可获得完整播放');
   }
 
-  let fullTrack: AudioTrack = { ...track, url };
+  let fullTrack: AudioTrack = { ...track, url, resolvedQuality: usePlayerStore.getState().playingQuality || track.resolvedQuality };
 
   // 把解析到的地址回写队列，切回本曲时无需再次解析
   const writeBack = () => {

@@ -7,6 +7,7 @@ export interface AudioTrack {
   url: string;
   cover: string;
   source?: string;
+  resolvedQuality?: string;
 }
 
 export interface AudioState {

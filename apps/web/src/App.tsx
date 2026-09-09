@@ -94,9 +94,11 @@ export default function App() {
   }, [immersive]);
 
   // 节拍脉冲 → 歌词发光（仅切换 class，不触发 React 渲染）
+  // Home 页可见时暂停：歌词已隐藏，无需驱动 beat-pulse 样式
   useEffect(() => {
     let last = false;
     const unsub = usePlayerStore.subscribe((state) => {
+      if (useUIStore.getState().homeVisible) return;
       const beat = !!state.analyserData?.beatPulse;
       if (beat !== last) {
         last = beat;

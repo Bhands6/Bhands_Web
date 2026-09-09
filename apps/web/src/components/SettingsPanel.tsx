@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   useSettingsStore,
   VISUAL_PRESETS,
@@ -121,6 +121,69 @@ const HOTKEY_INFO: { keys: string; desc: string }[] = [
  * 入口 FAB 在顶栏 Home 按钮旁（TopCorners 渲染），面板从右上滑出；
  * 鼠标完全离开「面板 + FAB」热区才收回（含容差与拖动保护）
  */
+/** LX Music 脚本管理子组件 */
+function LxMusicSection() {
+  const [scripts, setScripts] = useState<{ id: string; sources: string[]; active: boolean }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/api/music/parse/lx/list');
+      const data = await res.json();
+      if (data.success) setScripts(data.data || []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    try {
+      const script = await file.text();
+      const res = await fetch('/api/music/parse/lx/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script, name: file.name.replace(/\.js$/, '') })
+      });
+      const data = await res.json();
+      if (data.success) await refresh();
+      else alert(data.error || '上传失败');
+    } catch { alert('上传失败'); }
+    setLoading(false);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const handleDelete = async (id: string) => {
+    await fetch('/api/music/parse/lx/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    await refresh();
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {scripts.map((s) => (
+        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+          <span style={{ flex: 1, color: 'rgba(255,255,255,.7)' }}>
+            {s.sources.join(', ') || s.id}
+            {s.active && <span style={{ color: '#4ade80', marginLeft: 6 }}>● 活跃</span>}
+          </span>
+          <button className="fx-mini-btn" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => handleDelete(s.id)}>删除</button>
+        </div>
+      ))}
+      <label style={{ cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,.5)', padding: '6px 0' }}>
+        {loading ? '上传中…' : '+ 上传 .js 脚本'}
+        <input ref={fileRef} type="file" accept=".js" style={{ display: 'none' }} onChange={handleUpload} />
+      </label>
+    </div>
+  );
+}
+
 export default function SettingsPanel() {
   const panelOpen = useSettingsStore((s) => s.panelOpen);
   const setPanelOpen = useSettingsStore((s) => s.setPanelOpen);
@@ -369,6 +432,18 @@ export default function SettingsPanel() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* ---- LX Music 脚本管理 ---- */}
+        <div className="fx-fold open">
+          <div className="fx-fold-body">
+            <div className="fx-section-label">LX Music 音源脚本</div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.45)', marginBottom: 8, lineHeight: 1.5 }}>
+              上传 LX Music 格式的 .js 音源脚本，可解锁更多解析通道。
+              脚本从 GitHub 搜索 <b>lx-music-source</b> 获取。
+            </div>
+            <LxMusicSection />
           </div>
         </div>
 
