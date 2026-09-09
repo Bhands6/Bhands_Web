@@ -18,6 +18,7 @@ interface SessionEntry {
 }
 
 const sessions = new Map<string, SessionEntry>();
+// TODO: 测试用功能，正式部署时移除 cookie 持久化（persistSessions / loadPersistedSessions / COOKIE_FILE）
 /** 存盘：保存所有会话到文件 */
 function persistSessions(): void {
   try {

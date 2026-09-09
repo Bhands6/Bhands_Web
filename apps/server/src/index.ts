@@ -83,6 +83,7 @@ async function main() {
     // 启动时加载已持久化的 LX Music 脚本
     loadPersistedScripts().then((n) => { if (n) console.log(`[LxMusic] 已加载 ${n} 个持久化脚本`); }).catch(() => {});
 
+    // TODO: 测试用功能，正式部署时移除
     // 启动时恢复持久化的网易云登录会话
     const restoredSessions = loadPersistedSessions();
     if (restoredSessions) console.log(`[Session] 已恢复 ${restoredSessions} 个登录会话`);
