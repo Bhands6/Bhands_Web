@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { musicRoutes } from './routes/music';
 import { loadPersistedScripts } from './services/music-sources/lxMusicRunner';
+import { loadPersistedSessions } from './neteaseSession';
 import { userRoutes } from './routes/user';
 import { weatherRoutes } from './routes/weather';
 
@@ -81,6 +82,10 @@ async function main() {
 
     // 启动时加载已持久化的 LX Music 脚本
     loadPersistedScripts().then((n) => { if (n) console.log(`[LxMusic] 已加载 ${n} 个持久化脚本`); }).catch(() => {});
+
+    // 启动时恢复持久化的网易云登录会话
+    const restoredSessions = loadPersistedSessions();
+    if (restoredSessions) console.log(`[Session] 已恢复 ${restoredSessions} 个登录会话`);
   } catch (err) {
     server.log.error(err);
     process.exit(1);
