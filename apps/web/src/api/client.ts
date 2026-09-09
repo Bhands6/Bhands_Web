@@ -4,6 +4,8 @@ import axios from 'axios';
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000,
+  // 携带 bhands_sid 会话 cookie（多账号登录隔离依赖它）
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }

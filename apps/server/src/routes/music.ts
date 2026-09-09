@@ -56,7 +56,7 @@ function proxyAudioUrl(url: string): string {
 /** 从其它平台（咪咕/酷狗/酷我等）解析完整音源，失败返回 null
  *  minSize: 最小文件体积（字节），过滤平台返回的十几秒预览片段
  *  timeout: 探测超时（毫秒），避免切歌长时间卡在平台匹配上 */
-async function tryUnblockFullTrack(id: string, minSize = 0, timeout = 0): Promise<{
+async function tryUnblockFullTrack(id: string, minSize = 0, timeout = 0, cookie = ''): Promise<{
   url: string;
   quality: string;
   trial: boolean;
@@ -64,7 +64,7 @@ async function tryUnblockFullTrack(id: string, minSize = 0, timeout = 0): Promis
 } | null> {
   const doMatch = (async () => {
     try {
-      const detail = await NcmApi.song_detail({ ids: id, cookie: getNeteaseCookie() });
+      const detail = await NcmApi.song_detail({ ids: id, cookie });
       const s = detail.body?.songs?.[0];
       if (!s) return null;
 
@@ -151,7 +151,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
         type: 1,
         limit: Math.min(Number(limit) || 30, 100),
         offset: Number(offset) || 0,
-        cookie: getNeteaseCookie()
+        cookie: getNeteaseCookie(request)
       });
       const songs = (res.body?.result?.songs || []).map(mapNcmSong);
       return { success: true, data: songs };
@@ -166,7 +166,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     try {
-      const res = await NcmApi.song_detail({ ids: id, cookie: getNeteaseCookie() });
+      const res = await NcmApi.song_detail({ ids: id, cookie: getNeteaseCookie(request) });
       const song = res.body?.songs?.[0];
       if (!song) {
         return reply.status(404).send({ success: false, error: '歌曲不存在' });
@@ -185,7 +185,8 @@ export async function musicRoutes(fastify: FastifyInstance) {
     const level = QUALITY_LEVEL[quality] || 'exhigh';
 
     try {
-      const res = await NcmApi.song_url_v1({ id, level, cookie: getNeteaseCookie() });
+      const cookie = getNeteaseCookie(request);
+      const res = await NcmApi.song_url_v1({ id, level, cookie });
       const info = res.body?.data?.[0];
 
       if (info?.url) {
@@ -203,7 +204,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
         }
 
         // 试听片段（VIP/付费曲，未登录或无会员）→ 限时 5 秒探测其它平台完整音源（≥1MB），超时/失败回退试听
-        const unblocked = await tryUnblockFullTrack(id, 1_000_000, 5_000);
+        const unblocked = await tryUnblockFullTrack(id, 1_000_000, 5_000, cookie);
         if (unblocked) {
           return { success: true, data: { ...unblocked, url: proxyAudioUrl(unblocked.url) } };
         }
@@ -219,7 +220,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
       }
 
       // 无直链（灰色/版权下架）→ 从其它平台匹配
-      const unblocked = await tryUnblockFullTrack(id);
+      const unblocked = await tryUnblockFullTrack(id, 0, 0, cookie);
       if (unblocked) {
         return { success: true, data: { ...unblocked, url: proxyAudioUrl(unblocked.url) } };
       }
@@ -236,7 +237,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     try {
-      const res = await NcmApi.lyric({ id, cookie: getNeteaseCookie() });
+      const res = await NcmApi.lyric({ id, cookie: getNeteaseCookie(request) });
       return {
         success: true,
         data: {
@@ -256,7 +257,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     try {
-      const res = await NcmApi.playlist_detail({ id, cookie: getNeteaseCookie() });
+      const res = await NcmApi.playlist_detail({ id, cookie: getNeteaseCookie(request) });
       const pd = res.body?.playlist;
       if (!pd) {
         return reply.status(404).send({ success: false, error: '歌单不存在' });
@@ -278,8 +279,8 @@ export async function musicRoutes(fastify: FastifyInstance) {
   });
 
   // 推荐歌曲：登录用每日推荐，未登录退化为新歌速递
-  fastify.get('/recommend', async (_request: FastifyRequest, _reply: FastifyReply) => {
-    const cookie = getNeteaseCookie();
+  fastify.get('/recommend', async (request: FastifyRequest, _reply: FastifyReply) => {
+    const cookie = getNeteaseCookie(request);
 
     if (cookie) {
       try {

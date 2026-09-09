@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import NcmApiDefault from 'NeteaseCloudMusicApi';
-import { getNeteaseCookie, setNeteaseCookie, clearNeteaseCookie } from '../neteaseSession';
+import { getNeteaseCookie, setNeteaseCookie, clearNeteaseCookie, ensureSid } from '../neteaseSession';
 
 // NCM 自带类型过于严格（body 字段均为 unknown），路由层按宽松类型调用
 const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
@@ -13,9 +13,9 @@ interface UserInfo {
   vipType?: number;
 }
 
-/** 用当前会话 cookie 拉取网易云账号信息（未登录/失效返回 null） */
-async function fetchUserInfo(): Promise<UserInfo | null> {
-  const cookie = getNeteaseCookie();
+/** 用当前浏览器会话的网易云 cookie 拉取账号信息（未登录/失效返回 null） */
+async function fetchUserInfo(request: FastifyRequest): Promise<UserInfo | null> {
+  const cookie = getNeteaseCookie(request);
   if (!cookie) return null;
 
   try {
@@ -42,9 +42,10 @@ const QR_MESSAGES: Record<number, string> = {
 };
 
 export async function userRoutes(fastify: FastifyInstance) {
-  // 生成扫码登录二维码
-  fastify.get('/qr/create', async (_request: FastifyRequest, reply: FastifyReply) => {
+  // 生成扫码登录二维码（顺带签发浏览器会话 ID，后续轮询/登录都绑定到该浏览器）
+  fastify.get('/qr/create', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
+      ensureSid(request, reply);
       const keyRes = await NcmApi.login_qr_key();
       const key = keyRes.body?.data?.unikey;
       if (!key) {
@@ -62,7 +63,7 @@ export async function userRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 轮询扫码状态（803 成功时服务端保存 cookie）
+  // 轮询扫码状态（803 成功时把网易云会话绑定到当前浏览器）
   fastify.get('/qr/check', async (request: FastifyRequest, reply: FastifyReply) => {
     const { key } = request.query as { key?: string };
     if (!key) {
@@ -74,14 +75,21 @@ export async function userRoutes(fastify: FastifyInstance) {
       const code = Number(res.body?.code) || 801;
 
       if (code === 803) {
-        const cookie = res.body?.cookie || '';
+        // 优先取 body.cookie；部分 NCM 版本会放在响应 Set-Cookie 头里，做兜底拼接
+        let cookie = res.body?.cookie || '';
+        if (!cookie && Array.isArray((res as any).cookie)) {
+          cookie = (res as any).cookie
+            .map((c: string) => c.split(';')[0])
+            .filter((c: string) => c.includes('='))
+            .join('; ');
+        }
         if (!cookie) {
           return { success: true, data: { code, message: '登录成功但未取得会话' } };
         }
-        setNeteaseCookie(cookie);
+        setNeteaseCookie(request, reply, cookie);
         // login_status 偶发超时时重试一次，尽量避免 user 为空
-        let user = await fetchUserInfo();
-        if (!user) user = await fetchUserInfo();
+        let user = await fetchUserInfo(request);
+        if (!user) user = await fetchUserInfo(request);
         return { success: true, data: { code, message: QR_MESSAGES[code], user } };
       }
 
@@ -92,17 +100,17 @@ export async function userRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 登录状态
-  fastify.get('/status', async (_request: FastifyRequest, _reply: FastifyReply) => {
-    const user = await fetchUserInfo();
-    if (!user) clearNeteaseCookie(); // cookie 失效及时清理
+  // 登录状态（按浏览器会话独立判定）
+  fastify.get('/status', async (request: FastifyRequest, _reply: FastifyReply) => {
+    const user = await fetchUserInfo(request);
+    if (!user) clearNeteaseCookie(request); // cookie 失效及时清理
     return { success: true, data: { loggedIn: !!user, user } };
   });
 
-  // 用户歌单
+  // 用户歌单（返回当前登录者自己的歌单）
   fastify.get('/playlists', async (request: FastifyRequest, reply: FastifyReply) => {
-    const cookie = getNeteaseCookie();
-    const user = await fetchUserInfo();
+    const cookie = getNeteaseCookie(request);
+    const user = await fetchUserInfo(request);
     if (!user || !cookie) {
       return reply.status(401).send({ success: false, error: '未登录' });
     }
@@ -122,9 +130,9 @@ export async function userRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 退出登录
-  fastify.post('/logout', async (_request: FastifyRequest, _reply: FastifyReply) => {
-    clearNeteaseCookie();
+  // 退出登录（仅退出当前浏览器会话）
+  fastify.post('/logout', async (request: FastifyRequest, _reply: FastifyReply) => {
+    clearNeteaseCookie(request);
     return { success: true, data: null };
   });
 }

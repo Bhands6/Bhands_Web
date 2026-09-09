@@ -337,7 +337,7 @@ export async function weatherRoutes(fastify: FastifyInstance) {
 
       const searches = await Promise.allSettled(
         seeds.map((keyword) =>
-          NcmApi.cloudsearch({ keywords: keyword, type: 1, limit: 6, cookie: getNeteaseCookie() })
+          NcmApi.cloudsearch({ keywords: keyword, type: 1, limit: 6, cookie: getNeteaseCookie(request) })
         )
       );
 
