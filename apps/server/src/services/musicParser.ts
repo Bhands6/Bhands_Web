@@ -157,9 +157,13 @@ export async function resolveSongUrl(params: ParseParams & { vip: boolean; cooki
 const PROXY = (url: string) => /^https?:\/\//i.test(url) ? `/api/music/stream?url=${encodeURIComponent(url)}` : url;
 
 async function tryNcmOfficial(p: ParseParams, cookie?: string): Promise<ParseResult | null> {
+  // 无 cookie 时跳过需要会员的高音质，避免无意义请求
+  const VIP_LEVELS = ['jymaster', 'hires', 'lossless'];
   const ALL_LEVELS = ['jymaster', 'hires', 'lossless', 'exhigh', 'standard'];
   const startIdx = ALL_LEVELS.indexOf(p.quality || 'exhigh');
-  const chain = startIdx >= 0 ? ALL_LEVELS.slice(startIdx) : ['exhigh', 'standard'];
+  let chain = startIdx >= 0 ? ALL_LEVELS.slice(startIdx) : ['exhigh', 'standard'];
+  if (!cookie) chain = chain.filter(l => !VIP_LEVELS.includes(l));
+  if (!chain.length) chain = ['standard'];
   let trialFallback: ParseResult | null = null;
 
   for (const level of chain) {
@@ -173,7 +177,14 @@ async function tryNcmOfficial(p: ParseParams, cookie?: string): Promise<ParseRes
       if (!trialFallback) {
         trialFallback = { url: PROXY(info.url), quality: level, trial: true, size: info.size || 0, source: 'netease-trial' };
       }
-    } catch { /* next */ }
+    } catch (err: any) {
+      const msg = err?.body?.msg || err?.message || '';
+      console.warn(`[MusicParser] NCM ${level} 失败:`, msg);
+      // ECONNRESET/502 = 连接被重置，短暂等待后重试下一级
+      if (msg.includes('ECONNRESET') || msg.includes('502')) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
   }
   return trialFallback;
 }
