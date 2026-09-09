@@ -24,9 +24,9 @@ export function songItemToTrack(song: SongItem): AudioTrack {
 /** 解析播放地址（服务端 VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方） */
 async function resolveTrackUrl(id: string): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
   const { quality } = useUIStore.getState();
-  const { loggedIn } = useUserStore.getState();
+  const { user } = useUserStore.getState();
   try {
-    const response = await musicApi.getSongUrl(id, quality, loggedIn);
+    const response = await musicApi.getSongUrl(id, quality, !!user?.vip);
     if (response.success && response.data?.url) {
       return { url: response.data.url, trial: response.data.trial, quality: response.data.quality };
     }
