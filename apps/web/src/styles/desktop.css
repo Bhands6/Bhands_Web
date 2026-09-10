@@ -1,4 +1,4 @@
-/* 全局重置 */
+﻿/* 全局重置 */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 /* 基础布局 */
 html,body{font-family:var(--font-sans);background:#000;color:#fff;overflow:hidden;height:100vh;width:100vw;user-select:none;-webkit-font-smoothing:antialiased}
@@ -683,9 +683,11 @@ body.home-controls-locked #bottom-bar{opacity:0!important;pointer-events:none!im
 .volume-popover{position:absolute;left:50%;bottom:46px;transform:translateX(-50%) translateY(8px);width:154px;height:42px;padding:0 12px;border-radius:14px;border:1px solid rgba(255,255,255,.09);background:rgba(12,12,16,.78);backdrop-filter:blur(24px) saturate(1.12);-webkit-backdrop-filter:blur(24px) saturate(1.12);box-shadow:0 18px 48px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.07);display:flex;align-items:center;gap:9px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:1}
 .volume-control .ctrl-btn,.quality-control .ctrl-btn{position:relative;z-index:2}
 .volume-control.open .volume-popover,.volume-control:hover .volume-popover,.volume-control:focus-within .volume-popover,.quality-control.open .quality-popover,.quality-control:hover .quality-popover,.quality-control:focus-within .quality-popover{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
-#quality-btn.quality-pill{width:auto;min-width:56px;padding:0 11px;border-radius:13px;font-size:11px;font-weight:800;letter-spacing:.2px;color:rgba(237,245,255,.82);background:rgba(255,255,255,.038);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+#quality-btn.quality-pill{width:auto;min-width:78px;padding:0 13px;border-radius:13px;font-size:11px;font-weight:800;letter-spacing:.2px;color:rgba(237,245,255,.82);background:rgba(255,255,255,.038);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
 #quality-btn-label{display:block;min-width:30px;text-align:center;white-space:nowrap}
 .quality-popover{position:absolute;left:50%;bottom:46px;transform:translateX(-50%) translateY(8px);width:228px;padding:8px;border-radius:14px;border:1px solid rgba(157,184,207,.24);background:rgba(10,11,14,.82);backdrop-filter:blur(24px) saturate(1.25);-webkit-backdrop-filter:blur(24px) saturate(1.25);box-shadow:0 18px 48px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.08);display:grid;grid-template-columns:1fr;gap:6px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:8}
+/* 音质弹窗 portal 模式：脱离 #bottom-bar 层叠上下文，z-index 高于面板/弹窗 */
+.quality-popover.portal{bottom:auto!important;opacity:1!important;pointer-events:auto!important;z-index:400}
 .quality-option{min-height:40px;border-radius:9px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.045);color:rgba(255,255,255,.70);font-family:inherit;font-size:12px;font-weight:800;letter-spacing:.1px;cursor:pointer;transition:background .2s,border-color .2s,color .2s,transform .2s;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;text-align:left}
 .quality-option span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .quality-option small{font-size:9.5px;font-weight:700;color:rgba(255,255,255,.42);letter-spacing:0;white-space:nowrap}
@@ -1277,6 +1279,11 @@ body.immersive-mode #fx-fab{opacity:0!important;visibility:hidden!important;poin
 .fx-seg button:last-child{border-right:none}
 .fx-seg button:hover{background:rgba(255,255,255,.05);color:#fff}
 .fx-seg button.active{background:rgba(0,245,212,.10);color:var(--fc-accent)}
+/* 粒子效果项数较多（9 个）：排成 3 列多行，而不是挤在一行里。
+   原来 .fx-seg 是 flex:1，9 个 chip 会被均分到 ~45px，三字标签会文字重叠；
+   改成 grid 后每格等宽、自动换行（以后再加效果也只会继续往下排） */
+.fx-seg.fx-seg-many{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:5px}
+.fx-seg.fx-seg-many button{flex:none;width:100%;border-right:none;border-radius:8px}
 
 /* --- 高级参数折叠面板（粒子、流速、扭曲、色彩、溢光等）--- */
 .fx-advanced{margin-top:16px;border:1px solid rgba(255,255,255,.055);border-radius:13px;padding:10px 12px;background:rgba(255,255,255,.022)}
@@ -1380,6 +1387,16 @@ body.immersive-mode #fx-fab{opacity:0!important;visibility:hidden!important;poin
 .qi-act button:hover{background:rgba(255,255,255,.15);color:#fff}
 .qi-act button.queue-next:hover{background:rgba(0,245,212,.14);color:#eafffb}
 .qi-act button.liked,.song-action-btn.liked{color:#ff7a90;background:rgba(255,122,144,.10)}
+/* 队列项右侧播放状态：与播放器真实状态同步。
+   播放中 = 三格律动条；暂停 = 冻结成低平条并整体变暗，和「播放中」文案同步切换 */
+.qi-state{display:flex;align-items:center;gap:5px;flex-shrink:0;font-size:10px;line-height:1;color:var(--fc-accent);white-space:nowrap}
+.qi-state.paused{color:rgba(255,255,255,.34)}
+.qi-bars{display:flex;align-items:flex-end;gap:1px;width:8px;height:9px}
+.qi-bars span{flex:1;height:100%;border-radius:1px;background:currentColor;transform-origin:bottom;animation:qi-bar .9s ease-in-out infinite}
+.qi-bars span:nth-child(2){animation-delay:-.6s}
+.qi-bars span:nth-child(3){animation-delay:-.3s}
+.qi-state.paused .qi-bars span{animation:none;transform:scaleY(.4)}
+@keyframes qi-bar{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}}
 .song-action-btn{width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.045);color:rgba(255,255,255,.58);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .18s;font-size:14px;line-height:1}
 .song-action-btn:hover{background:rgba(0,245,212,.10);border-color:rgba(0,245,212,.32);color:#eafffb;transform:translateY(-1px)}
 .queue-chip{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03);font-size:10.5px;color:rgba(255,255,255,.65)}

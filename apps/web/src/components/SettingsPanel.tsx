@@ -5,7 +5,9 @@ import {
   RenderQuality,
   ParticleEffect,
   EFFECT_LABELS,
-  VisualSettings
+  VisualSettings,
+  LYRIC_OFFSET_LIMIT,
+  LYRIC_BACKDROP_MAX
 } from '../stores/useSettingsStore';
 
 /** 滑块行（复用桌面版 .fx-slider 样式） */
@@ -53,7 +55,8 @@ function SegRow<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="fx-seg">
+    // 项数多时允许换行：否则 flex:1 会把每个 chip 压到文字互相重叠
+    <div className={`fx-seg${options.length > 6 ? ' fx-seg-many' : ''}`}>
       {options.map((opt) => (
         <button
           key={opt.key}
@@ -122,6 +125,30 @@ const HOTKEY_INFO: { keys: string; desc: string }[] = [
  * 鼠标完全离开「面板 + FAB」热区才收回（含容差与拖动保护）
  */
 /** LX Music 脚本管理子组件 */
+const ADMIN_TOKEN_KEY = 'bhands-admin-token';
+
+function getAdminToken(): string {
+  try { return localStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+/** 带管理令牌的写操作请求：401 时弹窗索取令牌并重试一次（令牌对应服务器 .env 的 ADMIN_TOKEN） */
+async function adminPost(url: string, body: unknown): Promise<any> {
+  const post = (token: string) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'x-admin-token': token } : {}) },
+    body: JSON.stringify(body)
+  });
+  let res = await post(getAdminToken());
+  if (res.status === 401) {
+    const input = window.prompt('此操作需要服务器管理令牌（部署时 .env 中的 ADMIN_TOKEN）：');
+    if (input === null) return { success: false, error: '已取消' };
+    const token = input.trim();
+    try { localStorage.setItem(ADMIN_TOKEN_KEY, token); } catch {}
+    res = await post(token);
+  }
+  return res.json().catch(() => ({ success: false, error: '响应解析失败' }));
+}
+
 function LxMusicSection() {
   const [scripts, setScripts] = useState<{ id: string; sources: string[]; active: boolean }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -140,15 +167,11 @@ function LxMusicSection() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 500 * 1024) { alert('脚本过大（上限 500KB）'); return; }
     setLoading(true);
     try {
       const script = await file.text();
-      const res = await fetch('/api/music/parse/lx/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script, name: file.name.replace(/\.js$/, '') })
-      });
-      const data = await res.json();
+      const data = await adminPost('/api/music/parse/lx/upload', { script, name: file.name.replace(/\.js$/, '') });
       if (data.success) await refresh();
       else alert(data.error || '上传失败');
     } catch { alert('上传失败'); }
@@ -157,11 +180,7 @@ function LxMusicSection() {
   };
 
   const handleDelete = async (id: string) => {
-    await fetch('/api/music/parse/lx/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id })
-    });
+    await adminPost('/api/music/parse/lx/delete', { id });
     await refresh();
   };
 
@@ -404,6 +423,25 @@ export default function SettingsPanel() {
               value={lyrics.glowStrength}
               onChange={(v) => setLyrics({ glowStrength: v })}
             />
+            <SliderRow
+              label="衬底强度"
+              min={0} max={LYRIC_BACKDROP_MAX} step={0.05}
+              value={lyrics.backdrop}
+              onChange={(v) => setLyrics({ backdrop: v })}
+            />
+            <div className="fx-slider-hint">
+              当前行背后的暗色晕影，用来在亮色舞台上拉开歌词对比度。调 0 可完全关闭
+            </div>
+            <SliderRow
+              label="时间偏移"
+              min={-LYRIC_OFFSET_LIMIT} max={LYRIC_OFFSET_LIMIT} step={0.05}
+              value={lyrics.offset}
+              format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(2)}s`}
+              onChange={(v) => setLyrics({ offset: v })}
+            />
+            <div className="fx-slider-hint">
+              歌词整体超前/滞后时微调：正值歌词延后，负值歌词提前（第三方音源母带与歌词时间轴常不一致）
+            </div>
             <ColorRow
               label="歌词颜色"
               value={lyrics.color}
@@ -442,6 +480,7 @@ export default function SettingsPanel() {
             <div style={{ fontSize: 11, color: 'rgba(255,255,255,.45)', marginBottom: 8, lineHeight: 1.5 }}>
               上传 LX Music 格式的 .js 音源脚本，可解锁更多解析通道。
               脚本从 GitHub 搜索 <b>lx-music-source</b> 获取。
+              上传/删除需服务器管理令牌（ADMIN_TOKEN），首次操作时会提示输入。
             </div>
             <LxMusicSection />
           </div>

@@ -112,6 +112,7 @@ export const useUserStore = create<UserState>((set) => ({
         queuePanelOpen: false,
         queuePanelPeek: false,
         queuePanelPinned: false,
+        queuePanelAwaitHover: false,
         queueTab: 'queue',
         loginModalOpen: false,
         immersive: false,

@@ -7,8 +7,10 @@ import { create } from 'zustand';
 
 export type RenderQuality = 'eco' | 'balanced' | 'high' | 'ultra';
 
-/** 粒子效果形态（复刻桌面版 shader 预设：丝绸/滚筒/星球/虚空/唱片/星河壁纸） */
-export type ParticleEffect = 'silk' | 'tunnel' | 'orbit' | 'void' | 'vinyl' | 'wallpaper';
+/** 粒子效果形态（复刻桌面版 shader 预设：丝绸/滚筒/星球/虚空/唱片/星河壁纸 + 新增 极光/万花筒/迸发） */
+export type ParticleEffect =
+  | 'silk' | 'tunnel' | 'orbit' | 'void' | 'vinyl' | 'wallpaper'
+  | 'aurora' | 'kaleido' | 'burst';
 
 export const EFFECT_LABELS: Record<ParticleEffect, string> = {
   silk: '丝绸',
@@ -16,17 +18,23 @@ export const EFFECT_LABELS: Record<ParticleEffect, string> = {
   orbit: '星球',
   void: '虚空',
   vinyl: '唱片',
-  wallpaper: '星河'
+  wallpaper: '星河',
+  aurora: '极光',
+  kaleido: '万花筒',
+  burst: '迸发'
 };
 
-/** 桌面版 uPreset 序号（shader 分支索引） */
+/** 桌面版 uPreset 序号（shader 分支索引）；6/7/8 为本次新增，见 ParticleStage 顶点着色器 */
 export const EFFECT_PRESET_INDEX: Record<ParticleEffect, number> = {
   silk: 0,
   tunnel: 1,
   orbit: 2,
   void: 3,
   vinyl: 4,
-  wallpaper: 5
+  wallpaper: 5,
+  aurora: 6,
+  kaleido: 7,
+  burst: 8
 };
 
 /** 旧版效果名 → 桌面版预设迁移 */
@@ -57,6 +65,40 @@ export interface LyricsSettings {
   colorMode: 'auto' | 'custom'; // auto=封面取色渐变 / custom=纯色
   color: string;
   glowStrength: number;       // 溢光强度 0-1.6
+  /**
+   * 歌词衬底强度 0-1.6（当前行背后的暗色晕影，对应桌面版 readability 平面）。
+   * 舞台背景是高亮粒子帘时，亮色溢光贴在亮背景上没有对比度、看着像「没有光」，
+   * 故加一层暗底拉开对比；但亮暗封面的反差需求差别很大，所以交给用户调。0 = 完全关闭。
+   */
+  backdrop: number;
+  /**
+   * 歌词时间偏移（秒）：正值=歌词延后，负值=歌词提前。
+   * 用于校正「音源母带与歌词时间轴不一致」或「音频输出延迟（蓝牙/声卡缓冲）」
+   * 造成的恒定超前/滞后 —— 这类偏移无法自动探测，需手动校准。
+   */
+  offset: number;
+}
+
+/** 歌词时间偏移钳制范围（秒），与面板滑块一致 */
+export const LYRIC_OFFSET_LIMIT = 2;
+
+/** 歌词衬底强度默认值与上限（与面板滑块一致） */
+export const LYRIC_BACKDROP_DEFAULT = 1;
+export const LYRIC_BACKDROP_MAX = 1.6;
+
+/** 规范化歌词时间偏移（非有限值回退 0，超界钳制） */
+export function clampLyricOffset(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-LYRIC_OFFSET_LIMIT, Math.min(LYRIC_OFFSET_LIMIT, n));
+}
+
+/** 规范化歌词衬底强度（缺失/非法回退默认值，超界钳制到 0~1.6；0 = 关闭衬底） */
+export function clampLyricBackdrop(v: unknown): number {
+  if (v === undefined || v === null) return LYRIC_BACKDROP_DEFAULT;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return LYRIC_BACKDROP_DEFAULT;
+  return Math.max(0, Math.min(LYRIC_BACKDROP_MAX, n));
 }
 
 interface SettingsState {
@@ -94,7 +136,9 @@ const DEFAULT_LYRICS: LyricsSettings = {
   letterSpacing: 2,
   colorMode: 'auto',
   color: '#a9b8c8',
-  glowStrength: 1.0
+  glowStrength: 1.0,
+  backdrop: 1.0,
+  offset: 0
 };
 
 /** 画质档位 → 粒子网格 / 渲染像素比上限（对齐桌面版 coverParticleGridForResolution：88~183，默认 118×118） */
@@ -138,7 +182,12 @@ function loadPersisted(): { visual: VisualSettings; lyrics: LyricsSettings } {
     }
     return {
       visual,
-      lyrics: { ...DEFAULT_LYRICS, ...raw.lyrics }
+      lyrics: {
+        ...DEFAULT_LYRICS,
+        ...raw.lyrics,
+        offset: clampLyricOffset(raw.lyrics?.offset),
+        backdrop: clampLyricBackdrop(raw.lyrics?.backdrop)
+      }
     };
   } catch {
     return { visual: { ...DEFAULT_VISUAL }, lyrics: { ...DEFAULT_LYRICS } };
@@ -152,6 +201,7 @@ function applyCssVars(lyrics: LyricsSettings, visual: VisualSettings): void {
   root.setProperty('--lyric-weight', String(lyrics.weight));
   root.setProperty('--lyric-letter-spacing', `${lyrics.letterSpacing}px`);
   root.setProperty('--lyric-glow-strength', String(lyrics.glowStrength));
+  root.setProperty('--lyric-backdrop', String(lyrics.backdrop));
   root.setProperty('--album-bg-opacity', String(visual.backgroundOpacity));
 
   // 歌词纯色模式：body 类切换 + 颜色变量（auto 模式保持封面取色渐变）
@@ -190,6 +240,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setLyrics: (patch) => {
     const lyrics = { ...get().lyrics, ...patch };
+    if (patch.offset !== undefined) lyrics.offset = clampLyricOffset(lyrics.offset);
+    if (patch.backdrop !== undefined) lyrics.backdrop = clampLyricBackdrop(lyrics.backdrop);
     set({ lyrics });
     persist(get().visual, lyrics);
     applyCssVars(lyrics, get().visual);

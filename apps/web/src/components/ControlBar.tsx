@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import { useUIStore, QUALITY_LABELS, PlayQuality } from '../stores/useUIStore';
 import { useFavoritesStore } from '../stores/useFavoritesStore';
@@ -19,16 +20,14 @@ const QUALITY_OPTIONS: { key: PlayQuality; label: string; note: string }[] = [
   { key: 'standard', label: '标准', note: '128kbps' }
 ];
 
-/** 实际播放音质 → 友好显示 */
-function formatPlayingQuality(q: string): string {
+/** 后端实际音源 → 来源标签（仅用于辅助标注，不替代用户选择的请求档位） */
+function deriveSourceTag(q: string): string {
   if (!q) return '';
-  const pill = QUALITY_PILL[q as PlayQuality];
-  if (pill) return pill;
   if (q.startsWith('gdmusic')) return 'GD';
   if (q.startsWith('lx')) return 'LX';
   if (q === 'unblock') return 'UC';
-  if (q.startsWith('netease-')) return QUALITY_PILL[q.replace('netease-', '') as PlayQuality] || q.replace('netease-', '').toUpperCase();
-  return q.toUpperCase();
+  if (q.startsWith('netease-')) return 'NCM';
+  return '';
 }
 
 const QUALITY_PILL: Record<PlayQuality, string> = {
@@ -82,6 +81,11 @@ export default function ControlBar() {
   const mouseRef = useRef({ x: -9999, y: -9999, buttons: 0 });
   const [visible, setVisible] = useState(false);
   const [softHidden, setSoftHidden] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [qualityPos, setQualityPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const qualityBtnRef = useRef<HTMLButtonElement>(null);
+  const qualityPopRef = useRef<HTMLDivElement>(null);
+  const qualityHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 「保持展示」热区：屏幕最底部边缘带（48px）+ 播放栏矩形 + 可见的音量/音质弹层（视觉上浮在栏上方）
   const inKeepZone = () => {
@@ -102,6 +106,9 @@ export default function ControlBar() {
       const cs = getComputedStyle(pop);
       if (cs.pointerEvents !== 'none' && hit(pop)) return true;
     }
+    // 音质弹层 portal 到了 body，不在 bar 子树内，单独计入热区
+    // （弹层未打开时 ref 为 null，hit(null) 返回 false，无需额外状态判断）
+    if (showing && hit(qualityPopRef.current)) return true;
     return false;
   };
 
@@ -153,6 +160,34 @@ export default function ControlBar() {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     };
   }, []);
+
+  // 音质弹窗位置同步：打开时基于按钮 rect 计算 fixed 坐标
+  useEffect(() => {
+    if (!qualityOpen) return;
+    const btn = qualityBtnRef.current;
+    if (!btn) return;
+    const update = () => {
+      const r = btn.getBoundingClientRect();
+      const popH = qualityPopRef.current?.offsetHeight ?? 228;
+      setQualityPos({ top: r.top - 8 - popH, left: r.left + r.width / 2 });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+  }, [qualityOpen]);
+
+  // 点击外部关闭音质弹窗
+  useEffect(() => {
+    if (!qualityOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (qualityBtnRef.current?.contains(t) || qualityPopRef.current?.contains(t)) return;
+      setQualityOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [qualityOpen]);
 
   // body.controls-visible 联动（Home 上移等样式依赖它）
   useEffect(() => {
@@ -271,26 +306,22 @@ export default function ControlBar() {
               </div>
             </div>
 
-            <div className="quality-control">
+            <div
+              className={`quality-control${qualityOpen ? ' open' : ''}`}
+              onMouseEnter={() => { if (qualityHoverTimer.current) clearTimeout(qualityHoverTimer.current); qualityHoverTimer.current = null; setQualityOpen(true); }}
+              onMouseLeave={() => { qualityHoverTimer.current = setTimeout(() => setQualityOpen(false), 180); }}
+            >
               <button
-                className="ctrl-btn quality-pill"
+                ref={qualityBtnRef}
+                id="quality-btn" className="ctrl-btn quality-pill"
                 title="播放音质"
                 style={{ fontSize: '11.5px', fontWeight: 800, letterSpacing: '.5px' }}
               >
-                <span>{playingQuality ? formatPlayingQuality(playingQuality) : QUALITY_PILL[quality]}</span>
+                <span>{QUALITY_PILL[quality]}</span>
+                {playingQuality && deriveSourceTag(playingQuality) && (
+                  <span style={{ marginLeft: 4, fontSize: '9px', opacity: 0.55 }}>{deriveSourceTag(playingQuality)}</span>
+                )}
               </button>
-              <div className="quality-popover" onClick={(e) => e.stopPropagation()}>
-                {QUALITY_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.key}
-                    className={`quality-option${quality === opt.key ? ' active' : ''}`}
-                    onClick={() => changeQuality(opt.key)}
-                  >
-                    <span>{opt.label}</span>
-                    <small>{opt.note}</small>
-                  </button>
-                ))}
-              </div>
             </div>
 
             <button
@@ -460,6 +491,30 @@ export default function ControlBar() {
           </div>
         </div>
       </div>
+
+      {/* 音质弹窗：portal 到 body，脱离 #bottom-bar 层叠上下文 */}
+      {qualityOpen && createPortal(
+        <div
+          ref={qualityPopRef}
+          className="quality-popover portal visible"
+          style={{ position: 'fixed', top: qualityPos.top, left: qualityPos.left, transform: 'translateX(-50%)' }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseEnter={() => { if (qualityHoverTimer.current) clearTimeout(qualityHoverTimer.current); qualityHoverTimer.current = null; }}
+          onMouseLeave={() => { qualityHoverTimer.current = setTimeout(() => setQualityOpen(false), 180); }}
+        >
+          {QUALITY_OPTIONS.map((opt) => (
+            <button
+              key={opt.key}
+              className={`quality-option${quality === opt.key ? ' active' : ''}`}
+              onClick={() => changeQuality(opt.key)}
+            >
+              <span>{opt.label}</span>
+              <small>{opt.note}</small>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
     </>
   );
 }

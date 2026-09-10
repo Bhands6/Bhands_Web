@@ -19,6 +19,12 @@ export const QUALITY_LABELS: Record<PlayQuality, string> = {
   standard: '标准'
 };
 
+/**
+ * 「主页 → 我的歌单」打开面板后，等待鼠标移入的时间窗。
+ * 超时仍未移入则自动收起，避免面板一直挂在左侧挡住主页内容。
+ */
+export const QUEUE_PANEL_AWAIT_HOVER_MS = 5000;
+
 interface UIState {
   // 启动页
   splashActive: boolean;
@@ -33,10 +39,18 @@ interface UIState {
   queuePanelOpen: boolean;      // 底部队列按钮切换（常驻）
   queuePanelPeek: boolean;      // 左边缘悬停临时显示
   queuePanelPinned: boolean;
+  /**
+   * 由「主页 → 我的歌单」等入口**程序化**打开时置 true：面板等待鼠标进入，
+   * 若在 QUEUE_PANEL_AWAIT_HOVER_MS 内鼠标始终没移到面板上，就自动收起。
+   * 目的是避免面板一直挂在左侧挡住主页；底部「队列」按钮打开时不置位（保持常驻）。
+   * 鼠标进入面板（或左缘热区）会立即清掉该标志，按原有常驻逻辑留在屏幕上。
+   */
+  queuePanelAwaitHover: boolean;
   queueTab: 'queue' | 'playlists';
   setQueuePanelOpen: (open: boolean) => void;
   setQueuePanelPeek: (peek: boolean) => void;
   toggleQueuePanelPinned: () => void;
+  setQueuePanelAwaitHover: (v: boolean) => void;
   setQueueTab: (tab: 'queue' | 'playlists') => void;
 
   // 登录
@@ -114,13 +128,17 @@ export const useUIStore = create<UIState>((set, get) => ({
   queuePanelOpen: false,
   queuePanelPeek: false,
   queuePanelPinned: false,
+  queuePanelAwaitHover: false,
   queueTab: 'queue',
 
   homeVisible: true,
   setHomeVisible: (visible) => set({ homeVisible: visible }),
-  setQueuePanelOpen: (open) => set({ queuePanelOpen: open }),
+  // 关面板时一并清掉「等待鼠标进入」标志，避免残留状态影响下次打开
+  setQueuePanelOpen: (open) =>
+    set(open ? { queuePanelOpen: true } : { queuePanelOpen: false, queuePanelAwaitHover: false }),
   setQueuePanelPeek: (peek) => set({ queuePanelPeek: peek }),
   toggleQueuePanelPinned: () => set((s) => ({ queuePanelPinned: !s.queuePanelPinned })),
+  setQueuePanelAwaitHover: (v) => set({ queuePanelAwaitHover: v }),
   setQueueTab: (tab) => set({ queueTab: tab }),
 
   loginModalOpen: false,

@@ -51,7 +51,7 @@
   font-size: calc(clamp(22px, 3.4vw, 42px) * var(--lyric-scale, 1));
 }
 #stage-lyrics.single .stage-lyric-line.current .sll-text {
-  transform: scale(calc(var(--single-fit, 1) * (1 + var(--beat-glow, 0) * 0.022 + var(--lyric-sun, 0) * 0.018)));
+  transform: scale(calc(var(--single-fit, 1) * (1 + var(--beat-glow, 0) * 0.05 + var(--lyric-sun, 0) * 0.02)));
 }
 /* Home 视图可见时：主页层级高于歌词（歌词仍在后台同步数据，切回舞台即恢复） */
 body.empty-home-active #app-stage > section {
@@ -111,7 +111,22 @@ body.empty-home-active #bottom-handle {
   color: var(--stage-lyric-hl, var(--stage-lyric-color, #fff));
   opacity: 1;
   filter: blur(0);
-  transform: translateZ(46px) scale(1);
+  /* 整行呼吸（--lyric-breath 由 StageLyrics rAF 写入，对应桌面版 mesh breathe） */
+  transform: translateZ(46px) scale(calc(1 + var(--lyric-breath, 0)));
+  /* 可读性衬底（对应桌面版 buildLyricMesh 的 readability 平面）：
+     亮色粒子帘/亮封面下，亮色发光与背景没有对比度，看起来就像「没有发光」。
+     强度由视觉控制台「衬底强度」滑块驱动（--lyric-backdrop，0 = 完全关闭）：
+     亮/暗封面所需的对比度差别很大，写死一个值必然有人不合适。
+     ⚠️ 渐变半径必须 ≤ 50%：淡出必须在元素盒**内**完成，否则会被盒子裁切，
+     形成一块硬边深色矩形（原实现 68%/360% 在盒子左右边缘仍残留 ~0.25、
+     上下边缘 ~0.6 的 alpha，所以看着像「歌词后面有个黑背景」）。
+     该背景绘制在元素背景层，负 z-index 的 ::before/::after 发光层会叠在它之上。 */
+  background: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    rgba(0, 0, 0, calc(.58 * var(--lyric-backdrop, 1))) 0%,
+    rgba(0, 0, 0, calc(.40 * var(--lyric-backdrop, 1))) 40%,
+    rgba(0, 0, 0, 0) 100%
+  );
 }
 /* 行内文字层：节拍溢光 + 微呼吸（--beat-glow / --lyric-sun 由 StageLyrics rAF 写入）
    独立短过渡，跟随音频帧而非状态切换的 .45s */
@@ -119,29 +134,64 @@ body.empty-home-active #bottom-handle {
   display: inline-block;
   transition: text-shadow .12s ease, transform .12s ease;
 }
+/**
+ * 溢光层（对应桌面版 buildLyricMesh 的加色 glow 平面 / sun 光晕）：
+ * 桌面版当前行是「文字 + 加色发光层(opacity≈0.075+solar*0.34+beatGlow*0.16) + 更大光晕平面」三层叠加，
+ * 这里用 ::before 复制文字做模糊加色层、::after 做大范围光晕，两者强度都由节拍/阳光能量驱动。
+ */
+.stage-lyric-line.current::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  padding: inherit;
+  pointer-events: none;
+  white-space: inherit;
+  word-break: inherit;
+  overflow-wrap: inherit;
+  color: var(--stage-lyric-glow, rgba(157, 184, 207, .55));
+  /* 紧贴字形的「亮芯」发光（对应桌面版加色 glow 平面）：模糊半径有意收窄且不乘溢光强度，
+     否则强度拉满时半径可达上百 px，光被摊成一层淡雾，看起来就像没有发光。 */
+  filter: blur(calc(4px + 13px * var(--beat-glow, 0)));
+  opacity: calc(0.14 + var(--lyric-sun, 0) * 0.36 + var(--beat-glow, 0) * 0.72);
+  transform: scale(calc(1 + var(--beat-glow, 0) * 0.06));
+  z-index: -2;
+}
 .stage-lyric-line.current .sll-text {
   text-shadow: 0 1px 2px rgba(0, 0, 0, .6),
     0 0 9px rgba(0, 0, 0, .4),
-    0 0 calc((34px + 26px * var(--beat-glow, 0)) * var(--lyric-glow-strength, 1)) var(--stage-lyric-glow, rgba(157, 184, 207, .55)),
+    0 0 calc((24px + 32px * var(--beat-glow, 0)) * var(--lyric-glow-strength, 1)) var(--stage-lyric-glow, rgba(157, 184, 207, .55)),
     0 2px 26px rgba(0, 0, 0, .35);
-  transform: scale(calc(1 + var(--beat-glow, 0) * 0.022 + var(--lyric-sun, 0) * 0.018));
+  transform: scale(calc(1 + var(--beat-glow, 0) * 0.06 + var(--lyric-sun, 0) * 0.03 + var(--lyric-bass, 0) * 0.038));
 }
-/* 阳光溢光：副歌/高能段落在当前行后方浮现的柔光（对应桌面版 lyric sun 效果） */
+/* 大范围柔光光晕（对应桌面版 sun 光晕平面）：副歌/高能段落浮现，节拍命中时同步增强/放大 */
 .stage-lyric-line.current::after {
   content: '';
   position: absolute;
   inset: -55% -12%;
   background: radial-gradient(closest-side, var(--stage-lyric-glow, rgba(157, 184, 207, .5)), transparent 72%);
   filter: blur(28px);
-  opacity: calc(var(--lyric-sun, 0) * 0.55);
+  opacity: calc(var(--lyric-sun, 0) * 0.55 + var(--beat-glow, 0) * 0.50);
+  transform: scale(calc(1 + var(--beat-glow, 0) * 0.20));
   pointer-events: none;
-  z-index: -1;
+  z-index: -3;
 }
+/* 单行模式：跟随 --single-fit 等比缩放，保持与正文对齐 */
+#stage-lyrics.single .stage-lyric-line.current::before {
+  transform: scale(calc(var(--single-fit, 1) * (1 + var(--beat-glow, 0) * 0.06)));
+}
+/* 节拍命中短闪（App.tsx 的 beat-pulse，220ms）：半径必须收敛，
+   否则乘以溢光强度后可达近 200px，光被摊平成雾，节拍闪烁反而看不出来。 */
 body.beat-pulse .stage-lyric-line.current .sll-text {
   text-shadow: 0 1px 2px rgba(0, 0, 0, .6),
     0 0 9px rgba(0, 0, 0, .4),
-    0 0 calc((46px + 20px * var(--beat-glow, 0)) * var(--lyric-glow-strength, 1)) var(--stage-lyric-glow, rgba(157, 184, 207, .8)),
+    0 0 calc(36px + 28px * var(--beat-glow, 0)) var(--stage-lyric-glow, rgba(157, 184, 207, .9)),
+    0 0 12px rgba(255, 255, 255, .55),
     0 2px 26px rgba(0, 0, 0, .35);
+}
+/* 短闪同时把亮芯层整体提亮一档，让「一拍一亮」感知更强 */
+body.beat-pulse .stage-lyric-line.current::before {
+  opacity: calc(0.36 + var(--beat-glow, 0) * 0.60);
+  filter: blur(calc(6px + 16px * var(--beat-glow, 0)));
 }
 /* 歌词纯色模式（视觉控制台「歌词颜色」自定义）：当前行用自定义色 */
 body.lyric-custom-color .stage-lyric-line.current {
@@ -297,5 +347,14 @@ body.lyric-custom-color .stage-lyric-line.current {
 #fullscreen-diy-zone,
 #fullscreen-window-controls {
   display: none !important;
+}
+
+/* ---------- 视觉控制台：滑块下方说明文字 ---------- */
+.fx-slider-hint {
+  margin: -2px 0 8px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  letter-spacing: .2px;
+  color: rgba(255, 255, 255, .40);
 }
 

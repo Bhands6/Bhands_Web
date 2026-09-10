@@ -42,8 +42,8 @@ export const musicApi = {
     return apiClient.get('/music/search', { params: { keyword, limit } });
   },
 
-  async getSongUrl(id: string, quality = 'exhigh', vip = false): Promise<ApiResponse<SongUrlData>> {
-    return apiClient.get(`/music/song/${id}/url`, { params: { quality, vip } });
+  async getSongUrl(id: string, quality = 'exhigh', vip = false, fresh = false): Promise<ApiResponse<SongUrlData>> {
+    return apiClient.get(`/music/song/${id}/url`, { params: { quality, vip, ...(fresh ? { fresh: 1 } : {}) } });
   },
 
   async getLyrics(id: string): Promise<ApiResponse<LyricsData>> {

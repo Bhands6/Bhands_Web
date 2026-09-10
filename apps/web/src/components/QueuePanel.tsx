@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useUIStore } from '../stores/useUIStore';
+import { useUIStore, QUEUE_PANEL_AWAIT_HOVER_MS } from '../stores/useUIStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import { useUserStore } from '../stores/useUserStore';
 import { playTrack, playPlaylist } from '../services/playService';
@@ -15,6 +15,7 @@ export default function QueuePanel() {
   const open = useUIStore((s) => s.queuePanelOpen);
   const peek = useUIStore((s) => s.queuePanelPeek);
   const pinned = useUIStore((s) => s.queuePanelPinned);
+  const awaitHover = useUIStore((s) => s.queuePanelAwaitHover);
   const tab = useUIStore((s) => s.queueTab);
   const setTab = useUIStore((s) => s.setQueueTab);
   const togglePinned = useUIStore((s) => s.toggleQueuePanelPinned);
@@ -23,6 +24,7 @@ export default function QueuePanel() {
 
   const playlist = usePlayerStore((s) => s.playlist);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
   const playMode = usePlayerStore((s) => s.playMode);
   const setPlayMode = usePlayerStore((s) => s.setPlayMode);
   const clearPlaylist = usePlayerStore((s) => s.clearPlaylist);
@@ -50,6 +52,10 @@ export default function QueuePanel() {
       clearTimeout(hoverTimer.current);
       hoverTimer.current = null;
     }
+    // 鼠标已经移到面板（或左缘热区）上 → 取消「等待移入」的自动收起窗口，面板按原逻辑常驻
+    if (useUIStore.getState().queuePanelAwaitHover) {
+      useUIStore.getState().setQueuePanelAwaitHover(false);
+    }
     useUIStore.getState().setQueuePanelPeek(true);
   };
 
@@ -60,6 +66,30 @@ export default function QueuePanel() {
       hoverTimer.current = null;
     }, 250);
   };
+
+  /**
+   * 等待移入窗口（对应「主页 → 我的歌单」这类程序化打开）：
+   * 开了面板但鼠标一直没移上去时，QUEUE_PANEL_AWAIT_HOVER_MS 后自动收起，
+   * 避免面板长期挂在左侧挡住主页。鼠标一移入即由 hoverIntentEnter 清掉标志并取消计时。
+   * 已固定（pinned）或非程序化打开（底部「队列」按钮、左缘悬停）都不参与自动收起。
+   */
+  useEffect(() => {
+    if (!open || !awaitHover || pinned) return;
+    const timer = setTimeout(() => {
+      const ui = useUIStore.getState();
+      // 二次确认：期间若鼠标已移入（标志被清）或已被固定，不再收起
+      if (!ui.queuePanelAwaitHover || ui.queuePanelPinned) return;
+      // 面板出现时鼠标恰好就停在它上面的话，浏览器不一定会补发 mouseenter
+      // （hover 状态要等下一次鼠标事件才刷新），这里用 :hover 兜一下，避免误收
+      const panel = document.getElementById('playlist-panel');
+      if (panel?.matches(':hover')) {
+        ui.setQueuePanelAwaitHover(false);
+        return;
+      }
+      ui.setQueuePanelOpen(false);
+    }, QUEUE_PANEL_AWAIT_HOVER_MS);
+    return () => clearTimeout(timer);
+  }, [open, awaitHover, pinned]);
 
   const cycleMode = () => {
     const order: Array<'sequence' | 'loop' | 'shuffle'> = ['sequence', 'loop', 'shuffle'];
@@ -151,7 +181,10 @@ export default function QueuePanel() {
                     <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,.38)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{track.artist}</div>
                   </div>
                   {i === currentIndex && (
-                    <span style={{ fontSize: 10, color: 'var(--fc-accent)', flexShrink: 0 }}>播放中</span>
+                    <span className={`qi-state${isPlaying ? '' : ' paused'}`} title={isPlaying ? '正在播放' : '已暂停'}>
+                      <span className="qi-bars" aria-hidden="true"><span /><span /><span /></span>
+                      {isPlaying ? '播放中' : '已暂停'}
+                    </span>
                   )}
                 </div>
               ))}

@@ -32,6 +32,7 @@ export default function HomeStage() {
   const showToast = useUIStore((s) => s.showToast);
   const setLoginModalOpen = useUIStore((s) => s.setLoginModalOpen);
   const setQueuePanelOpen = useUIStore((s) => s.setQueuePanelOpen);
+  const setQueuePanelAwaitHover = useUIStore((s) => s.setQueuePanelAwaitHover);
   const setQueueTab = useUIStore((s) => s.setQueueTab);
 
   const loggedIn = useUserStore((s) => s.loggedIn);
@@ -198,6 +199,8 @@ export default function HomeStage() {
     }
     setQueueTab('playlists');
     setQueuePanelOpen(true);
+    // 主页打开属于「顺带看一眼」：5s 内鼠标没移到面板上就自动收起，不挡住主页
+    setQueuePanelAwaitHover(true);
   };
 
   // 榜单卡片：整单入队直接播放，不弹队列面板
