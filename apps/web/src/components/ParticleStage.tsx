@@ -36,6 +36,24 @@ const RIPPLE_COOLDOWN = 0.32;
 const COVER_TEX_SIZE = 256;
 const EDGE_TEX_SIZE = 96;
 const BASE_FOV = 45;
+/**
+ * 流星拖尾长度 = 渲染缓冲高度的这个比例，并设像素上限。
+ * 它同时就是点精灵的边长 —— 精灵是正方形、面积按平方涨，所以别随手调大：
+ * 0.34 × 900px ≈ 306px 的点，5 颗同时在场也只有约 47 万片元（现代 GPU 无压力）。
+ *
+ * ⚠️ 注意片元里拖尾的实际长度只取这个边长的 0.82 倍：点精灵是正方形，
+ *    拖尾斜着穿过时若铺满整块方框，两端会被方框硬裁掉（表现为断头断尾）。
+ *    留出的余量就是给这个用的。想调拖尾长短改 **片元里的 0.82**，不是改这里。
+ */
+const METEOR_TRAIL_RATIO = 0.34;
+/**
+ * 拖尾长度的硬上限（像素）。**这个值必须由硬件决定，不能拍脑袋**：
+ * gl_PointSize 会被驱动静默夹到 ALIASED_POINT_SIZE_RANGE 的 max，
+ * 桌面 GL 常见 255、部分移动 GPU 只有 63/64。写死了 420 的话，
+ * 1080p 屏算出 280px 就被悄悄截断，拖尾长度与预期不符。
+ * 所以这里只作兜底，真实上限在 syncPixelUniforms 里用 gl.getParameter 查询。
+ */
+const METEOR_TRAIL_MAX_PX = 420;
 
 /** 每个预设的相机机位（对应桌面版 setPresetCamera 的 radius/phi）
  *  可见范围 ≈ radius 处 FOV45 的取景框：纵向 ±radius*0.414，横向再乘宽高比。
@@ -226,6 +244,11 @@ export default function ParticleStage() {
       uMouseXY: { value: new THREE.Vector2(-999, -999) },
       uMouseActive: { value: 0 },
       uPixel: { value: renderer.getPixelRatio() },
+      // 流星：uResolution 必须是**渲染缓冲**像素尺寸（片元里用 gl_FragCoord 算拖尾，
+      // 两者必须同系）；uMeteorSize 就是拖尾长度，也是点精灵的边长。
+      uResolution: { value: new THREE.Vector2(1, 1) },
+      uMeteorSize: { value: 240 },
+      uGrid: { value: 118 },
       uColorMixT: { value: 1.0 },
       uTintColor: { value: new THREE.Color('#9db8cf') },
       uTintStrength: { value: 0 },
@@ -240,10 +263,36 @@ export default function ParticleStage() {
       uBloomSize: { value: 2.65 }
     };
 
+    /**
+     * 同步「像素相关」的 uniform。流星的拖尾是在片元里用 gl_FragCoord（窗口像素）
+     * 算的，所以分辨率和拖尾长度都必须取**渲染缓冲**的像素尺寸，而不是 CSS 像素，
+     * 否则高 DPI 屏上拖尾会被挤短一半。
+     *
+     * 拖尾长度还要夹到硬件的点精灵尺寸上限：gl_PointSize 超上限会被驱动**静默截断**，
+     * 那会让拖尾长度在不同机器上不一致（而且点精灵是正方形，边长被截断时拖尾也跟着变短）。
+     * 所以这里查一次 ALIASED_POINT_SIZE_RANGE，用它和 METEOR_TRAIL_MAX_PX 里更小的那个。
+     */
+    const dbSize = new THREE.Vector2();
+    const pointSizeRange = renderer.getContext().getParameter(0x846D /* ALIASED_POINT_SIZE_RANGE */) as
+      | Float32Array
+      | null;
+    const maxPointSize = Math.max(
+      64,
+      Math.min(METEOR_TRAIL_MAX_PX, pointSizeRange && pointSizeRange.length > 1 ? pointSizeRange[1] : 255)
+    );
+    const syncPixelUniforms = () => {
+      renderer.getDrawingBufferSize(dbSize);
+      uniforms.uResolution.value.copy(dbSize);
+      uniforms.uPixel.value = renderer.getPixelRatio();
+      uniforms.uMeteorSize.value = Math.min(dbSize.y * METEOR_TRAIL_RATIO, maxPointSize);
+    };
+
     // ---------- 双层粒子（泛光层 + 主层，共享几何） ----------
     // 桌面版 coverParticleGridForResolution：奇数网格保证中心对称（118×118 ≈ 1.4 万粒子）
     let grid = Math.round(Math.sqrt(quality.particles));
     if (grid % 2 === 0) grid += 1;
+    uniforms.uGrid.value = grid;   // 着色器靠它把 aUv 还原成连续编号，前 5 个做流星槽位
+    syncPixelUniforms();
     const geo = buildCoverParticleGeometry(grid);
 
     const bloomMaterial = new THREE.ShaderMaterial({
@@ -272,6 +321,90 @@ export default function ParticleStage() {
     particles.frustumCulled = false;
     particles.renderOrder = 1;
     scene.add(particles);
+
+    /**
+     * ⚠️ 着色器编译自检（诊断用，别删）。
+     *
+     * GLSL 只在浏览器里真正编译，失败时 three 只会往 Console 丢一句
+     * `THREE.WebGLProgram: Shader Error … Vertex shader is not compiled.`（**不含行号**），
+     * 或者干脆把整个 Points 静默跳过 —— 表现就是「所有粒子都没效果了」，
+     * 而 tsc / vitest / oxlint / vite build / 所有静态检查工具**全绿**。
+     * 最常见的两类原因都没法在构建期发现：
+     *   ① varying 槽位超限（GLSL ES 1.00 只保证 8，ANGLE/D3D11 恰好就是 8）
+     *   ② gl_PointSize 超出 ALIASED_POINT_SIZE_RANGE（会被静默夹取）
+     *
+     * 这里做两件事：
+     *  1. 打印渲染环境（真 GPU 名称 + varying 上限 + 点精灵上限）
+     *  2. 把 three 已经编译好的 program 里带的 **原始 info log** 打出来（含行号），
+     *     这样出错时不用再靠猜，直接能定位到是哪一行。
+     */
+    const reportShaderHealth = () => {
+      const gl = renderer.getContext();
+      const glRenderer = gl.getExtension('WEBGL_debug_renderer_info');
+      const info = {
+        渲染器: glRenderer ? gl.getParameter(glRenderer.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+        最大varying槽位: gl.getParameter(gl.MAX_VARYING_VECTORS),
+        点精灵尺寸范围: Array.from(gl.getParameter(0x846D) as Float32Array),
+        实际拖尾尺寸: uniforms.uMeteorSize.value,
+        网格: uniforms.uGrid.value
+      };
+      console.log('[particles] 渲染环境自检', info);
+
+      // 强制 three 立刻编译这两个材质（renderer.compile 会把它们真正送进驱动）
+      try {
+        renderer.compile(scene, camera);
+      } catch (err) {
+        console.error('[particles] renderer.compile 抛错:', err);
+      }
+
+      /**
+       * 从 three 已编译的 program 里取原始日志。
+       * three r150+ 把编译诊断挂在 program.diagnostics 上；更早的版本要读
+       * gl.getShaderInfoLog，而那时 shader 句柄已经被 three 删掉了 —— 所以
+       * 这里优先读 diagnostics，取不到就退回「自己再编一遍」但**带上 three 的前缀**。
+       */
+      const prefixVertex =
+        'precision highp float;\nprecision highp int;\n' +
+        'attribute vec3 position;\nattribute vec3 normal;\nattribute vec2 uv;\n' +
+        'uniform mat4 modelMatrix;\nuniform mat4 modelViewMatrix;\nuniform mat4 projectionMatrix;\n' +
+        'uniform mat4 viewMatrix;\nuniform mat3 normalMatrix;\nuniform vec3 cameraPosition;\n' +
+        'uniform bool isOrthographic;\n';
+      const prefixFragment =
+        'precision highp float;\nprecision highp int;\n' +
+        'uniform mat4 viewMatrix;\nuniform vec3 cameraPosition;\nuniform bool isOrthographic;\n';
+
+      const compileAndReport = (label: string, type: number, source: string) => {
+        const sh = gl.createShader(type);
+        if (!sh) return true;
+        gl.shaderSource(sh, source);
+        gl.compileShader(sh);
+        const ok = gl.getShaderParameter(sh, gl.COMPILE_STATUS) as boolean;
+        if (!ok) {
+          const log = (gl.getShaderInfoLog(sh) || '(驱动未提供日志，这本身就是问题信号)').trim();
+          console.error(
+            `[particles] ❌ ${label}编译失败 —— 这就是「粒子全没了」的直接原因\n` +
+              `--- 驱动原始日志 ---\n${log}\n--------------------\n` +
+              `环境: ${JSON.stringify(info)}`
+          );
+        }
+        gl.deleteShader(sh);
+        return ok;
+      };
+      const vsOk = compileAndReport('顶点着色器', gl.VERTEX_SHADER, prefixVertex + VERTEX_SHADER);
+      const fsOk = compileAndReport('片元着色器', gl.FRAGMENT_SHADER, prefixFragment + FRAGMENT_SHADER);
+      const bvsOk = compileAndReport('泛光顶点着色器', gl.VERTEX_SHADER, prefixVertex + BLOOM_VERTEX_SHADER);
+      const bfsOk = compileAndReport('泛光片元着色器', gl.FRAGMENT_SHADER, prefixFragment + BLOOM_FRAGMENT_SHADER);
+      if (vsOk && fsOk && bvsOk && bfsOk) {
+        console.log('[particles] 四个着色器全部编译通过 ✅');
+      }
+      if (info.点精灵尺寸范围[1] < uniforms.uMeteorSize.value) {
+        console.warn(
+          `[particles] 拖尾尺寸 ${uniforms.uMeteorSize.value}px 超过了驱动的点精灵上限 ` +
+            `${info.点精灵尺寸范围[1]}px，会被夹取。`
+        );
+      }
+    };
+    reportShaderHealth();
 
     // ---------- 浮尘层（星河同款粒子：柔光圆点 + 封面主色 + 闪烁律动，可在视觉控制台开关） ----------
     const dustCount = quality.dust;
@@ -344,7 +477,7 @@ export default function ParticleStage() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
-      uniforms.uPixel.value = renderer.getPixelRatio();
+      syncPixelUniforms();
     };
     window.addEventListener('resize', onResize);
 

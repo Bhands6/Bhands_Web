@@ -17,6 +17,10 @@ uniform float uVinylSpin;
 uniform float uColorBoost, uCoverRes;
 uniform float uHasCover, uEdgeEnabled;
 uniform float uMouseActive, uPixel, uColorMixT;
+// 流星相关：uResolution 是**渲染缓冲**像素尺寸（与 gl_FragCoord 同一坐标系），
+// uMeteorSize 是拖尾的像素长度，uGrid 是粒子网格边长（用来推出每颗粒子的连续编号）
+uniform vec2 uResolution;
+uniform float uMeteorSize, uGrid;
 uniform sampler2D uCoverTex, uPrevCoverTex, uEdgeTex, uRippleTex;
 uniform int uRippleCount;
 uniform vec2 uMouseXY;
@@ -25,9 +29,38 @@ uniform float uTintStrength;
 attribute vec2 aUv;
 attribute float aRand;
 varying vec3 vColor;
-varying float vBright, vRipple, vEdgeBoost, vAlpha, vSourceLum;
+// ⚠️ varying 槽位是 GLSL ES 1.00 里最硬的资源限制：规范只保证
+//    MAX_VARYING_VECTORS = 8，而且 **ANGLE/D3D11（Windows Chrome 默认后端）不会把
+//    多个「varying float a, b, c;」合并进同一个槽**，每个声明都实打实占一个。
+//    超限的后果不是画得难看，而是**顶点着色器编译失败 → 主层 + 泛光层全都不渲染**，
+//    表现成「所有粒子效果都没了」，而 tsc / vitest / oxlint / vite build / glsl-parser
+//    全都不报错（唯一线索是 Console 里的 Vertex shader is not compiled.）。
+//    ❗注意：本文件的着色器是 **JS 模板字符串**，注释里绝对不能出现反引号（会提前结束字符串）。
+//
+//    这里用**打包 + 宏别名**把槽位从 7 压到 4，同时不改动下面几百行里
+//    对 vBright / vRipple … 的读写（宏展开后 vBright 就是 vPack0.x，读写都合法）：
+//      vColor        vec3 → 1 槽
+//      vPack0        vec4 → 1 槽（原 vBright / vRipple / vEdgeBoost / vAlpha）
+//      vPack1        vec4 → 1 槽（原 vSourceLum / 流星强度 / 拖尾方向角）
+//      vMeteorCenter vec2 → 1 槽（拖尾窗口中心，不能用有 y 轴歧义的 gl_PointCoord 代替）
+//    **以后要加 varying，先来这几个 vec4 里找一个空闲分量，不要新开声明。**
+varying vec4 vPack0;   // .x=vBright  .y=vRipple  .z=vEdgeBoost  .w=vAlpha
+varying vec4 vPack1;   // .x=vSourceLum  .y=vMeteor  .z=拖尾方向角(弧度)
+varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 gl_FragCoord 同系）
+// 宏别名：让旧代码里的名字继续可用（宏是纯文本替换，赋值语句同样生效）
+#define vBright    vPack0.x
+#define vRipple    vPack0.y
+#define vEdgeBoost vPack0.z
+#define vAlpha     vPack0.w
+#define vSourceLum vPack1.x
+#define vMeteor    vPack1.y
 
 #define PI 3.14159265359
+// 极光预设里划给「流星」的粒子数：一颗流星就是**一个粒子**（拖尾画在它的点精灵内部）。
+// 5 个槽位 × 每波随机启用 3~5 个。
+#define METEOR_SLOTS 5
+// 流星波次周期（秒）：每波出场 3~5 颗，波与波之间留一段干净的间歇。
+#define METEOR_WAVE_PERIOD 7.0
 
 vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 mod289v(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
@@ -117,6 +150,13 @@ void main(){
   float edgeVal = texture2D(uEdgeTex, safeCoverUv(aUv)).g;
   float maxRippleAmp = 0.0;
   float rippleZ = 0.0;
+  // 流星：默认关闭（普通粒子 vMeteor=0，片元里就不走拖尾分支）
+  vMeteor = 0.0;
+  vMeteorCenter = vec2(0.0);
+  vPack1.z = 0.0;   // 拖尾方向角
+  // >0 时覆盖粒子尺寸（单位：与 gl_PointSize 相同的像素）。
+  // 流星要一个「长条」点精灵，尺寸按屏高算，跟粒子的景深/音量尺寸公式无关。
+  float sizeOverride = -1.0;
 
   vec3 defaultColor = mix(
     vec3(0.36, 0.28, 0.72),
@@ -345,40 +385,94 @@ void main(){
   }
 
   // ====================================================
-  //  Preset 6: AURORA — 极光（三层垂直光幕 + 高频火花）
-  //  网格用 aUv.y 切成 3 层、层内作为幕高推进；低频抬高幕高，高频驱动闪烁与火花。
+  //  Preset 6: AURORA — 极光（三层垂直光幕 + 高频火花）+ 流星
+  //  帘幕：网格用 aUv.y 切成 3 层、层内作为幕高推进；低频抬高幕高，高频驱动闪烁与火花。
+  //  流星：网格最前面的 METEOR_SLOTS 颗粒子被征用为「流星槽位」。一颗流星＝一个粒子，
+  //        拖尾画在它的点精灵内部（见片元着色器），每波随机出场 3~5 颗。
   // ====================================================
   else if (uPreset < 6.5) {
-    float layer = floor(aUv.y * 3.0);
-    float ly = fract(aUv.y * 3.0);
-    float lseed = hash11(layer * 17.3 + aRand * 3.1);
+    // aUv = (i+0.5)/uGrid，所以 floor(aUv*uGrid) 能精确还原格点坐标，从而得到连续编号。
+    // 被征用的 5 颗在帘幕里留出 5/14000 的空缺，肉眼不可见。
+    float gx = floor(aUv.x * uGrid);
+    float gy = floor(aUv.y * uGrid);
+    float pid = gy * uGrid + gx;
 
-    float x = (aUv.x - 0.5) * 11.0;
-    float floorY = -3.2 + lseed * 1.0;
-    float height = 3.0 + lseed * 1.5 + uBass * 0.9 * K;
-    float phase = t * (0.20 + lseed * 0.14) + aRand * 6.28;
+    // ---------- 流星槽位的前置判定 ----------
+    // ⚠️ 这里必须**先算出本波颗数**，只有 pid < count 的槽位才是真·流星。
+    //    早先的写法是「pid < METEOR_SLOTS 就整段走流星分支」，于是每波剩余的
+    //    空闲槽位（METEOR_SLOTS 固定 5，但每波只用 3~5 颗）也被设上了大尺寸覆盖，
+    //    却因为 vMeteor=0 而在片元里落回普通点精灵路径 —— 表现为画面上几个
+    //    「又大又圆、不成形状的白斑」。绝不能只靠 vMeteor 在片元里兜底。
+    float waveIdx = floor(t / METEOR_WAVE_PERIOD);
+    float wphase = fract(t / METEOR_WAVE_PERIOD);
+    // 每波颗数：3、4 或 5（由波次哈希决定，波内固定）
+    float meteorsThisWave = 3.0 + floor(hash11(waveIdx * 13.71 + 3.3) * 3.0);
 
-    // 幕面横向摆动（大尺度噪声 + 小尺度褶皱）
-    float wave = snoise(vec3(aUv.x * 3.4 + lseed * 9.0, layer * 2.3, t * 0.16 + lseed * 4.0)) * 1.15
-               + sin(aUv.x * 9.0 + t * 0.7 + lseed * 6.0) * 0.40;
+    if (pid < meteorsThisWave) {
+      // ---------- 流星：一颗粒子从右上角斜掠到左下角，拖尾在片元里绘制 ----------
+      // 进到这里的一定是「本波启用」的槽位（pid < meteorsThisWave 已保证），无需再判一次。
+      // 每波每槽一组独立随机：换波即换一批轨迹与俯角
+      float s1 = hash11(waveIdx * 31.7 + pid * 12.9898 + 1.7);
+      float s2 = hash11(waveIdx * 57.3 + pid * 78.233 + 4.1);
+      float s3 = hash11(waveIdx * 91.1 + pid * 37.719 + 8.3);
 
-    pos.x = x + wave * ly * 1.05 + sin(phase) * 0.18;
-    pos.y = floorY + ly * height + sin(aUv.x * 12.0 - t * 1.3 + lseed * 3.0) * 0.22 * (0.4 + ly);
-    pos.z = -3.4 + layer * 1.7 + wave * 0.70 + snoise(vec3(aUv.x * 2.0, ly * 3.0, t * 0.24)) * 0.80;
+      // 波内错峰出发，单颗行进窗口占 0.34 个周期 → 同屏能同时看到数道，
+      // 一波划完后剩下的相位是干净的间歇。
+      float mph = (wphase - pid * 0.055) / 0.34;
+      // 淡入极快、尾段收掉：不在起手瞬间就全亮（否则会在起点糊出一坨亮斑）
+      float life = smoothstep(0.0, 0.06, mph) * (1.0 - smoothstep(0.86, 1.0, mph));
 
-    // 高频火花：稀疏亮点，逐点相位不同
-    float spark = pow(max(0.0, sin(t * (3.2 + lseed * 4.0) + aRand * 31.0)), 12.0);
-    float shimmer = 0.55 + 0.45 * sin(t * (2.0 + lseed * 1.6) + aUv.x * 22.0 + layer * 2.0);
+      // 方向：左下，俯角 22°~32°（PI + 0.38 ≈ 202°）。世界 y 与窗口 y 同向（相机无 roll），
+      // 所以同一条向量既用于世界位移、也直接当作拖尾朝向。
+      float ang = PI + 0.38 + s1 * 0.18;
+      vec2 dir = vec2(cos(ang), sin(ang));
 
-    // 真实极光配色：幕底青绿 → 幕顶紫 → 顶端一丝品红，再按封面混色
-    float hMix = clamp(ly * 1.15, 0.0, 1.0);
-    vec3 auroraCol = mix(vec3(0.22, 0.98, 0.66), vec3(0.62, 0.42, 1.0), hMix);
-    auroraCol = mix(auroraCol, vec3(0.98, 0.55, 0.82), pow(hMix, 3.0) * 0.55);
+      // 起点在画面右上角外侧；行程足够让它从画面左下角外离开
+      vec2 p0 = vec2(4.2 + s2 * 4.6, 4.6 - s3 * 1.2);
+      vec2 headP = p0 + dir * (mph * (16.0 + s3 * 3.0));
 
-    vColor = mix(auroraCol, coverColor, 0.34) * (0.72 + shimmer * 0.34 + spark * 0.9);
-    float curtainFade = smoothstep(0.0, 0.20, ly) * (1.0 - smoothstep(0.74, 1.0, ly));
-    vAlpha = (0.10 + ly * 0.34 + spark * 0.50 + uTreble * 0.16) * curtainFade;
-    maxRippleAmp = max(maxRippleAmp, ly * uBass * 0.34 + spark * 0.34 + shimmer * uMid * 0.10 + uBeat * 0.12);
+      pos = vec3(headP, 1.0 - s2 * 1.6);   // z 为正 → 画在帘幕之前，压着极光才看得清
+      // 流星强度写进 vPack1.y；方向角写进 vPack1.z（末尾统一换算窗口中心）
+      vMeteor = life;
+      vPack1.z = ang;
+      vColor = mix(vec3(0.74, 0.87, 1.0), coverColor, 0.30);   // 冷白偏蓝，再按封面混一点
+      vAlpha = 1.0;
+      // 拖尾是个「长条」精灵：尺寸按屏高给（与景深/音量无关，见片元的尺寸覆盖）
+      sizeOverride = uMeteorSize / max(0.0001, uPixel * uPointScale);
+    } else {
+      // 走到这里的包括「未被征用的格子」和「本波没启用的流星槽位」——
+      // 两者都必须按普通帘幕粒子渲染，否则空闲槽位会变成几个大圆斑。
+      float layer = floor(aUv.y * 3.0);
+      float ly = fract(aUv.y * 3.0);
+      float lseed = hash11(layer * 17.3 + aRand * 3.1);
+
+      float x = (aUv.x - 0.5) * 11.0;
+      float floorY = -3.2 + lseed * 1.0;
+      float height = 3.0 + lseed * 1.5 + uBass * 0.9 * K;
+      float phase = t * (0.20 + lseed * 0.14) + aRand * 6.28;
+
+      // 幕面横向摆动（大尺度噪声 + 小尺度褶皱）
+      float wave = snoise(vec3(aUv.x * 3.4 + lseed * 9.0, layer * 2.3, t * 0.16 + lseed * 4.0)) * 1.15
+                 + sin(aUv.x * 9.0 + t * 0.7 + lseed * 6.0) * 0.40;
+
+      pos.x = x + wave * ly * 1.05 + sin(phase) * 0.18;
+      pos.y = floorY + ly * height + sin(aUv.x * 12.0 - t * 1.3 + lseed * 3.0) * 0.22 * (0.4 + ly);
+      pos.z = -3.4 + layer * 1.7 + wave * 0.70 + snoise(vec3(aUv.x * 2.0, ly * 3.0, t * 0.24)) * 0.80;
+
+      // 高频火花：稀疏亮点，逐点相位不同
+      float spark = pow(max(0.0, sin(t * (3.2 + lseed * 4.0) + aRand * 31.0)), 12.0);
+      float shimmer = 0.55 + 0.45 * sin(t * (2.0 + lseed * 1.6) + aUv.x * 22.0 + layer * 2.0);
+
+      // 真实极光配色：幕底青绿 → 幕顶紫 → 顶端一丝品红，再按封面混色
+      float hMix = clamp(ly * 1.15, 0.0, 1.0);
+      vec3 auroraCol = mix(vec3(0.22, 0.98, 0.66), vec3(0.62, 0.42, 1.0), hMix);
+      auroraCol = mix(auroraCol, vec3(0.98, 0.55, 0.82), pow(hMix, 3.0) * 0.55);
+
+      vColor = mix(auroraCol, coverColor, 0.34) * (0.72 + shimmer * 0.34 + spark * 0.9);
+      float curtainFade = smoothstep(0.0, 0.20, ly) * (1.0 - smoothstep(0.74, 1.0, ly));
+      vAlpha = (0.10 + ly * 0.34 + spark * 0.50 + uTreble * 0.16) * curtainFade;
+      maxRippleAmp = max(maxRippleAmp, ly * uBass * 0.34 + spark * 0.34 + shimmer * uMid * 0.10 + uBeat * 0.12);
+    }
   }
 
 
@@ -500,7 +594,13 @@ void main(){
   float depthSize = 36.0 / max(0.5, -mvPos.z);
   float audioBoost = 1.0 + maxRippleAmp * 0.7 + edgeBoost * 0.55 + uBeat * 0.30 + uBurstAmt * 0.5;
   float sz = clamp(depthSize * audioBoost, 1.05, 4.95);
-  if (uPreset > 5.5) {
+  if (uPreset > 5.5 && uPreset < 6.5) {
+    // 极光（AURORA）：帘幕是靠**上万个细点**堆出「幕」的质感，点太大就变成一团颗粒，
+    // 看不出丝绸般的垂帘感。基准尺寸和上限都往下压，并且把音频驱动收敛一些
+    // （原来的 uBeat*0.30 会让鼓点一来整片幕「炸毛」成大颗粒）。
+    float auroraDrive = maxRippleAmp * 0.28 + uBass * 0.10 + uMid * 0.06 + uBeat * 0.10;
+    sz = clamp(depthSize * 0.62 * (1.0 + auroraDrive), 0.72, 2.60);
+  } else if (uPreset > 5.5) {
     // 粒子尺寸同样跟随 maxRippleAmp（迸发＝冲击环所在的那一圈更大），不用 uBeat
     float punchDrive = uBass * 0.075 + uMid * 0.050 + uTreble * 0.070 + maxRippleAmp * 0.30 + uBurstAmt * 0.120;
     sz = clamp(depthSize * (1.05 + punchDrive), 1.00, 5.45);
@@ -511,8 +611,14 @@ void main(){
     float ringDrive = uBass * 0.30 + uMid * 0.18 + uTreble * 0.22 + uBeat * 0.30;
     sz = clamp(depthSize * (0.90 + ringDrive * 0.62), 1.05, 3.90);
   }
+  // 流星覆盖尺寸：拖尾长度是按屏高给的像素值，与景深/音量那套公式无关
+  if (sizeOverride > 0.0) sz = sizeOverride;
   gl_PointSize = sz * uPixel * uPointScale;
   gl_Position = projectionMatrix * mvPos;
+  // 把粒子中心换算到**窗口像素**（与片元里的 gl_FragCoord 同一坐标系），供拖尾几何使用。
+  // 之所以不用 gl_PointCoord：它在不同平台/驱动上的 y 轴方向有歧义，
+  // 一旦反了拖尾的「头」就会画到后面去（变成倒着飞的流星）。
+  vMeteorCenter = (gl_Position.xy / gl_Position.w * 0.5 + 0.5) * uResolution;
 }
 `;
 
@@ -522,11 +628,99 @@ void main(){
 export const FRAGMENT_SHADER = /* glsl */ `
 precision highp float;
 uniform sampler2D uDotTex;
-uniform float uAlpha, uPreset;
+uniform float uAlpha, uPreset, uMeteorSize;
 varying vec3 vColor;
-varying float vBright, vRipple, vEdgeBoost, vAlpha, vSourceLum;
+varying vec4 vPack0;   // .x=vBright .y=vRipple .z=vEdgeBoost .w=vAlpha
+varying vec4 vPack1;   // .x=vSourceLum .y=vMeteor .z=拖尾方向角
+varying vec2 vMeteorCenter;
+#define vBright    vPack0.x
+#define vRipple    vPack0.y
+#define vEdgeBoost vPack0.z
+#define vAlpha     vPack0.w
+#define vSourceLum vPack1.x
+#define vMeteor    vPack1.y
 
 void main(){
+  // ====================================================
+  //  流星拖尾
+  //  一颗流星 = 一个粒子：拖尾直接画在它的点精灵内部（参考《巫师 3》的流星实现 ——
+  //  每颗就是一个细长条，且**头部远亮于尾部**，尾部按二次曲线渐隐）。
+  //  几何全部用窗口坐标（gl_FragCoord）计算，与顶点写入的窗口中心 / 方向角
+  //  同一坐标系，因此不存在点精灵 y 轴方向的平台歧义，拖尾朝向恒定正确。
+  // ====================================================
+  if (vMeteor > 0.002) {
+    vec2 vMeteorAxis = vec2(cos(vPack1.z), sin(vPack1.z));
+    vec2 d = gl_FragCoord.xy - vMeteorCenter;
+    float along = dot(d, vMeteorAxis);                       // >0 指向头部（左下）
+    float perp  = dot(d, vec2(-vMeteorAxis.y, vMeteorAxis.x));
+
+    // 拖尾长度：**不等于**精灵边长。
+    // ⚠️ 点精灵是正方形，边长 = uMeteorSize。若让拖尾铺满整个精灵，
+    //    它就会顶到精灵边界被硬裁，而且视觉上又粗又短像一块白斑。
+    //    这里只取边长的一部分作长度，剩下留作横向余量（避免斜向拖尾被方框切掉）。
+    float L  = max(uMeteorSize, 1.0) * 0.82;
+    float hf = L * 0.5;
+    // u: 0 = 头部（沿 axis 正方向的最前端，即飞行前方），1 = 尾端
+    // ⚠️ 「头部在哪一端」由 axis 的正方向决定：axis = (cos(vPack1.z), sin(vPack1.z))，
+    //    vPack1.z = ang = PI + 0.38 + … ≈ 202°，在 gl_FragCoord（y 向上）系里指向**左下**，
+    //    与世界里的飞行方向 dir 完全同向。所以 u=0 在左下 —— 流星从右上飞向左下，
+    //    头部在最前方（左下），拖尾朝来路（右上）拖。这是正确的，别把符号反过来。
+    //
+    // ⚠️⚠️ 这里**绝对不能**写成 u = clamp((hf - along) / L, 0.0, 1.0)（踩过，被用户抓到）：
+    //    钳制会让 along > hf（拖尾前端之外、精灵框内还剩 uMeteorSize*0.09 ≈ 22px）
+    //    的整片区域都取到 u = 0，也就是「头部轮廓」——轮廓不衰减、prof 仍为 1，
+    //    于是**头部前方凭空多出一截和头部一样亮的拖尾**。
+    //    视觉后果：亮核前方还有 20 多 px 的亮块，看起来像「头长在拖尾中间」。
+    //    正解是让 u 在头部前方**线性外推后截断**（见下面的 headCut），
+    //    使形状在 along > hf 处迅速收束成 0。
+    float axialT = (hf - along) / L;
+    float u  = clamp(axialT, 0.0, 1.0);
+
+    // 横向轮廓：**头部一个小圆头 + 向后收细的拖尾**（叶片形）。
+    // ⚠️ 这里试过两个极端，都不对：
+    //    ① w = wMax*(0.16+0.84*tail²) —— 头端留 0.16 保底宽度 → 钝头，叠上圆核像「棒子黏珠子」；
+    //    ② w = wMax*sqrt(u)*(…)      —— 头端宽度直接归 0 → 太单薄，像「棍子前端一个孤立小点」。
+    //    正解：宽度在头端**不为零但不最大**，最大值落在头部稍后一点，再向尾端收细。
+    //    这样头部是个饱满的小圆头（配合 head 亮核），拖尾自然变丝。
+    float wMax = max(uMeteorSize * 0.013, 1.4);
+    // u=0 头 → 宽度 0.62；u≈0.12 处最宽 1.0；之后缓降；u=1 尾端 0.24
+    float profileW = 0.62 + 0.38 * sin(u * 3.14159 * 0.92) - 0.38 * u;
+    float w  = wMax * clamp(profileW, 0.10, 1.2);
+    // 头部前方的收束：axialT < 0 表示已越过拖尾前端（飞行方向的最前沿）。
+    // 用一个快速衰减的窗把形状切掉，头部才真正「到边即止」，而不是拖出一截同样亮的余量。
+    // ⚠️ 斜率**不能太缓**：初版用 6.0，意味着从「完全消失」到「完全显现」横跨
+    //    1/6 * L ≈ 34px（精灵框内头部前方那 22px 全落在过渡带里）。
+    //    实测 along=+123 时 alpha 仍有 0.319、+108 时 0.739 —— 用户看到的就是
+    //    「头部左侧伸出一根短须」。改成 14.0 后过渡带收到约 14px，前缘干净。
+    float headCut = clamp(1.0 + axialT * 14.0, 0.0, 1.0);
+    // 横向同时也收窄，让切面是个尖角而不是一刀平的直角
+    w *= mix(0.20, 1.0, headCut);
+    float cc = perp / max(w, 0.0001);
+    // 纵向：四次渐隐，让尾巴真正收成一根丝（二次方在尾部还留得太粗）
+    float tail = 1.0 - u;
+    float prof = tail * tail * tail * tail * headCut;
+    float body = exp(-cc * cc) * prof;
+
+    // 头部亮核：压在拖尾最前锋（along = +hf，即飞行方向最前沿）的一个**小而亮**的点。
+    // ⚠️ 横向别给太宽：初版 headW = wMax*0.95，比拖尾头端（wMax*0.62）宽 1.5 倍，
+    //    横向剖面在 ±3px 处仍有明显亮度 → 看起来是一颗圆滚滚的珠子，不像流星的尖头。
+    //    现在收到与拖尾头端**同宽**（wMax*0.62），纵向 hr 略长一点做出纵向拉伸感，
+    //    于是头部是「顺着飞行方向的一点亮」而不是「一颗球」。
+    float ha = along - hf;
+    float hr = max(uMeteorSize * 0.018, 1.5);
+    float headW = max(wMax * 0.62, 0.8);
+    float head = exp(-(ha * ha) / (hr * hr) - (perp * perp) / (headW * headW)) * headCut;
+
+    // 头部只给「亮」，不要给「大」：body 已经很细，head 只负责点亮前缘。
+    // head 权重略低于 body，避免尖端过曝成一颗白珠。
+    float a = clamp(body * 0.90 + head * 0.50, 0.0, 1.0) * vMeteor * uAlpha;
+    if (a < 0.004) discard;
+    vec3 col = mix(vColor, vec3(1.0), clamp(prof * 0.30 + head * 0.95, 0.0, 1.0));
+    // 头部再加一点点亮度增益（0.45 而非 0.7，避免尖端过曝成纯白一颗珠）
+    gl_FragColor = vec4(col * (0.95 + head * 0.45), a);
+    return;
+  }
+
   vec4 tex = texture2D(uDotTex, gl_PointCoord);
   if (tex.a < 0.02) discard;
   vec3 col = vColor * vBright;
@@ -581,7 +775,14 @@ precision highp float;
 uniform sampler2D uDotTex;
 uniform float uAlpha, uBloomStrength, uPreset;
 varying vec3 vColor;
-varying float vBright, vRipple, vEdgeBoost, vAlpha, vSourceLum;
+varying vec4 vPack0;
+varying vec4 vPack1;
+#define vBright    vPack0.x
+#define vRipple    vPack0.y
+#define vEdgeBoost vPack0.z
+#define vAlpha     vPack0.w
+#define vSourceLum vPack1.x
+#define vMeteor    vPack1.y
 
 void main(){
   vec4 tex = texture2D(uDotTex, gl_PointCoord);
@@ -593,6 +794,9 @@ void main(){
   float pulse = 1.0 + vRipple * 0.65;
   float keepBlack = 1.0 - smoothstep(0.025, 0.115, vSourceLum);
   float bloomKeep = 1.0 - keepBlack * 0.92;
+  // 流星：泛光层会把点放大 2.65×，叠加圆点纹理就成了一坨大光斑。
+  // 压掉 92% 只留一点柔和光晕，拖尾本体交给主层画（主层才是长条形）。
+  bloomKeep *= 1.0 - vMeteor * 0.92;
   gl_FragColor = vec4(col, soft * uAlpha * uBloomStrength * pulse * 0.55 * vAlpha * bloomKeep);
 }
 `;
