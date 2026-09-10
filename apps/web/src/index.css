@@ -42,6 +42,11 @@
   mask-image: none;
   -webkit-mask-image: none;
   padding: 0;
+  /* ⚠️ overflow 必须放开：容器高度＝单行高度，而当前行的发光层 ::after 会向上下各外扩
+     55%（实际盒高约 2.1 倍行高）。只要还有 overflow:hidden，发光就被裁成一条横贯
+     文字宽度的硬边亮条（上下边恰好落在行中线两侧），看起来就像"歌词被切割"。
+     单行模式本来就只有一行、mask 也已关闭，这里不再需要任何裁切。 */
+  overflow: visible;
 }
 #stage-lyrics.single .stage-lyric-line {
   white-space: nowrap;
@@ -163,7 +168,10 @@ body.empty-home-active #bottom-handle {
     0 2px 26px rgba(0, 0, 0, .35);
   transform: scale(calc(1 + var(--beat-glow, 0) * 0.06 + var(--lyric-sun, 0) * 0.03 + var(--lyric-bass, 0) * 0.038));
 }
-/* 大范围柔光光晕（对应桌面版 sun 光晕平面）：副歌/高能段落浮现，节拍命中时同步增强/放大 */
+/* 大范围柔光光晕（对应桌面版 sun 光晕平面）：副歌/高能段落浮现，节拍命中时同步增强/放大
+   ⚠️ 这里向上下外扩 55%，实际绘制盒高约为行高的 2.1 倍。**父容器的 overflow 必须是 visible**，
+   否则这层发光会被父容器裁成横贯文字宽度的硬边亮条（症状：单行歌词看着像被"切割"）。
+   多行模式下 #stage-lyrics 仍保留 overflow:hidden，但那里有 mask-image 在 12%/88% 处渐隐兜底。 */
 .stage-lyric-line.current::after {
   content: '';
   position: absolute;

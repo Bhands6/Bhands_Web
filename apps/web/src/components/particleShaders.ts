@@ -62,6 +62,16 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 流星波次周期（秒）：每波出场 3~5 颗，波与波之间留一段干净的间歇。
 #define METEOR_WAVE_PERIOD 7.0
 
+// 三角波往返：0 → 1 → 0（周期 1）。
+// ⚠️ 无缝循环的关键工具：用 fract() 做循环时，1 会**硬跳**回 0（波前从远处瞬移回近处，
+//    视觉上就是一次突兀的"抽搐"）。三角波在两端都取到端点值、且位置连续，
+//    所以「由远及近再退回」看起来是自然的往复，而不是跳变。
+//    x=0 → 1，x=0.25 → 0.5，x=0.5 → 0，x=0.75 → 0.5，x=1 → 1。
+float triWave(float x){
+  float f = fract(x);
+  return abs(f * 2.0 - 1.0);
+}
+
 vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 mod289v(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 perm(vec4 x){return mod289v(((x*34.0)+1.0)*x);}
@@ -150,6 +160,9 @@ void main(){
   float edgeVal = texture2D(uEdgeTex, safeCoverUv(aUv)).g;
   float maxRippleAmp = 0.0;
   float rippleZ = 0.0;
+  // 螺旋星云的「核球强度」：分支里赋值，分支外的粒子尺寸公式要用它。
+  // ⚠️ 必须在这里声明 —— 分支内声明的话，尺寸计算（在分支之外）看不到它。
+  float nebBulge = 0.0;
   // 流星：默认关闭（普通粒子 vMeteor=0，片元里就不走拖尾分支）
   vMeteor = 0.0;
   vMeteorCenter = vec2(0.0);
@@ -510,7 +523,7 @@ void main(){
   //  uBurstAge = 距本次迸发开始的秒数，只在切歌时归零；不像之前每拍重置。
   //  爆开之后粒子**不再消失**，停在各自的稳定轨道上：恒定角速度自转，整片云一起缓慢上下平移。
   // ====================================================
-  else {
+  else if (uPreset < 8.5) {
     // 错峰飞出：4 批，每批晚 0.075s；单批行程 0.80s，所以最后一批在 1.05s 前飞完。
     // 常驻期 lph 恒为 1（不会回绕），粒子停在稳定轨道上。
     float wave = floor(hash11(aRand * 137.0) * 4.0);
@@ -548,6 +561,151 @@ void main(){
   }
 
   // ====================================================
+  //  Preset 9: SONIC — 声波地形
+  //  一张随音乐起伏的「山脊地图」：横向是扫描线，纵深（aUv.y）是远近，
+  //  高度由多层噪声叠加而成，低频整体抬高、高频加细碎波纹，
+  //  再叠一道自远而近、再由近而远往复推进的扫描波前（波前处最亮）。
+  //  相机贴地平视（phi=0.30），所以纵向位移会读成「地形起伏」。
+  //
+  //  ⚠️ 三个已修正的观感问题（都只能靠眼睛发现）：
+  //   ① 地形**整体偏上**：h 恒为正（depthFall + ridge + bassLift 三项都偏正），
+  //      实测 h∈[-0.74,1.75]、中心 +0.51 → 画面上半部挤满、下半部空。
+  //      修法：显式减一个 centerY 把中轴拉到 0，而不是靠调整某个系数碰运气。
+  //   ② **上下起伏范围不够**：振幅偏小（总跨度仅 2.5）。这里把三层噪声振幅整体放大，
+  //      并把 depthFall 改成**双向**（近处抬、远处压）以强化纵深。
+  //   ③ **循环不连贯**：原先用 fract(t*0.13) 做扫描，每 7.7 秒硬跳一次（波前瞬移）；
+  //      地形的时间种子又是无限线性漂移（噪声永不重复）。现在扫描改 triWave 往复，
+  //      时间种子也走 triWave 的**有界**往返 → 地形在同一片山谷里"呼吸"，永不飘走。
+  // ====================================================
+  else if (uPreset < 9.5) {
+    float gx = aUv.x;                       // 横向扫描线
+    float gz = aUv.y;                       // 纵深（0 = 近，1 = 远）
+
+    // 纵深方向按网格铺开；宽度比高度大，形成一条「带状地形」
+    float worldX = (gx - 0.5) * 13.0;
+    float worldZ = (gz - 0.5) * 7.0;
+
+    // 时间种子一律走 triWave 的**有界往返**（振幅 span 与各自周期都不同）：
+    // 噪声采样点因此始终在一小块区域内来回，地形不会随时间长成"另一张地图"。
+    // 三个周期取 27 / 19 / 13 秒，互不成简单整数比，合起来不会显出机械的同步感。
+    float tSeed1 = triWave(t / 27.0) * 0.62;
+    float tSeed2 = triWave(t / 19.0) * 1.10;
+    float tSeed3 = triWave(t / 13.0) * 3.30;
+
+    // 山脊高度：三层噪声（大起伏 + 中褶皱 + 细砂砾），逐层提高频率、降低振幅。
+    // 噪点用 worldX/worldZ 采样，保证相邻格点连续 → 看起来是「地形」而不是「散点」。
+    // ⚠️ 振幅比初版整体放大（1.15→1.28 / 0.42→0.49 / 0.14→0.16），否则上下起伏太平。
+    //    数值是**仿真扫出来的**：再放大 30% 就会在鼓点峰值时顶出可见范围（占满 98% 高度）。
+    float ridge = snoise(vec3(worldX * 0.55, worldZ * 0.42 + tSeed1, tSeed1)) * 1.28
+                + snoise(vec3(worldX * 1.60, worldZ * 1.25 + tSeed2, tSeed2)) * 0.49
+                + snoise(vec3(worldX * 4.20, worldZ * 3.40, tSeed3)) * 0.16;
+
+    // 纵深：近处抬、远处压（**双向**），形成"脚下是谷、远处是岭"的纵深层次；
+    // 初版 (1.0-gz)*0.55 是单向抬升，与 ridge 叠加后把整体顶到了 y>0。
+    float depthShape = (0.5 - gz) * 1.05;
+    float bassLift = uBass * 0.95 * clamp(1.0 - gz * 0.7, 0.3, 1.0);
+    float h = ridge * (0.92 + uMid * 0.42) + depthShape + bassLift;
+
+    // 把地形中轴拉到 y = 0。
+    // ⚠️ 这个常数是**量出来的**不是在纸面上推的：仿真扫出 h 的中轴约在 +0.35 附近
+    //    （depthShape 与 ridge 的正偏所致），bassLift 峰值再往上顶约 0.5。
+    //    减掉 0.42 后地形中心基本落回 0，上下各留约 1.2 的余量。
+    //    改动上面任何一个振幅 / depthShape / bassLift 系数，都要重新仿真核对这个值。
+    float centerY = 0.42;
+    h -= centerY;
+
+    // 扫描波前：**triWave 往复**（由远 gz=1 到近 gz=0，再退回），一个来回 36 秒。
+    // 用 triWave 而不是 fract：fract 会在 1→0 处把波前从远处瞬移回近处（突兀的跳），
+    // triWave 在端点自然折返，观感是"潮水来回"。
+    //
+    // ⚠️⚠️ 波前位置**绝不能把 uBeat 乘在绝对时间上**（踩过，会随播放时长越来越糟）：
+    //     错例（注释里不要写反引号，会截断本文件的 JS 模板字符串）：
+    //       scanPhase = t / 36.0 * (1.0 + uBeat * 0.55)
+    //     代数上它 = t/36 + (t * uBeat * 0.55)/36，那第二项**与 t 成正比** ——
+    //     t 是已播放秒数、只增不减，所以同一个 uBeat 突变在 t=60s 只让相位跳 0.46，
+    //     到 t=900s 就会跳 6.9 个整周期，波前表现为**瞬间乱闪**（用户报的"抖动"）。
+    //     现在 uBeat 只用于**亮度增益**（见下方 scanBand），位置纯 t/36 匀速往复，跳变恒为 0。
+    float scanPos = triWave(t / 36.0);
+    // ⚠️ 不能用 exp(-pow(d, 2.0))：GLSL 对**负底数**的 pow 未定义（部分驱动直接返回 NaN），
+    //    而 d 显然会取负。必须自己乘自己（dz*dz），公式等价且恒有定义。
+    float dz = (gz - scanPos) * 4.2;
+    // 拍点让波前"更亮"而不是"更靠前"：
+    // 基准亮度压到 0.72，留出 uBeat 的提升空间（0.72 → 1.0），最后钳回 [0,1] ——
+    // 下游拿 scanBand 当 mix 权重和 alpha 增益，超过 1 会让颜色外推（过曝）或 alpha 溢出。
+    float scanBand = min(1.0, exp(-dz * dz) * (0.72 + uBeat * 0.42));
+
+    pos.x = worldX;
+    pos.y = h;
+    // 整体推远：相机 radius=9.2、phi=0.30 俯视，地形若有粒子跑到 z>0 就会贴到相机前
+    // （透视放大成一团糊）。这里把整块地形压到 z ∈ [-7.5, -0.5]，全部落在相机前方。
+    pos.z = worldZ - 4.0;
+
+    // 配色：谷底深青 → 山脊暖白（hN 用 ±1 归一化，与居中的 h 配套）
+    float hN = clamp(h * 0.26 + 0.5, 0.0, 1.0);
+    vec3 sonicCol = mix(vec3(0.10, 0.52, 0.62), vec3(0.86, 0.94, 0.98), hN);
+    sonicCol = mix(sonicCol, vec3(0.72, 0.48, 1.0), scanBand * 0.55);
+    vColor = mix(sonicCol, coverColor, 0.30) * (0.78 + hN * 0.30 + scanBand * 0.55);
+
+    // 波前与脊顶更亮；谷底保持可见但不抢眼
+    vAlpha = (0.10 + hN * 0.30 + scanBand * 0.52 + uTreble * 0.10)
+           * (1.0 - smoothstep(0.86, 1.0, gz));   // 最远处淡出，藏住地形边缘
+    maxRippleAmp = max(maxRippleAmp, scanBand * 0.55 + hN * uBass * 0.28 + uTreble * 0.14);
+  }
+
+  // ====================================================
+  //  Preset 10: SPIRAL — 螺旋星云
+  //  两条对称旋臂 + 中心核球。极坐标布置：aUv 一个分量给半径、另一个给角度，
+  //  角度按半径做对数偏移（等角螺线），于是自然旋出两条臂。
+  //  中心区加密（核球），边缘撒出零星星尘；整片缓慢自转。
+  // ====================================================
+  else {
+    // 半径分布：**必须中心密**。
+    // ⚠️ 别用 sqrt(aUv.x)（那是「面积均匀」的正确分布）—— 星云的面亮度是从中心向外衰减的，
+    //    面积均匀会得到一个**中空的甜甜圈**（实测外圈 r 在 4.5~5.4 这一段占了 33% 的点、
+    //    核球只占 3%）。这里用 pow 1.45 让点向中心聚集，核球才有实体感。
+    // ❗注意注释里别写「带不配对括号的示例」：本文件的括号平衡由静态核查脚本和单测
+    //    按**逐字符**统计（不剥注释），注释里多出一个圆括号就会被误报成编译级错误。
+    float rr = pow(aUv.x, 1.45) * 5.4 + 0.05;
+
+    // 臂相：对数螺线 θ = k·ln(r) + 臂偏移。两条臂 → 偏移 0 / π
+    float armId = hash11(aRand * 313.0);
+    float armPick = floor(armId * 2.0);                    // 0 或 1 → 两条臂
+    float armOffset = armPick * PI;
+
+    // 臂内散射：越靠外散射越大（真实旋臂外侧更弥散）；核球区散射收窄，臂更清晰
+    float scatter = (hash11(aRand * 511.0) - 0.5) * (0.24 + aUv.x * 0.92);
+    float ang = 2.4 * log(max(rr, 0.12)) + armOffset + scatter + t * 0.075;
+
+    // 盘面的纵向起伏（薄盘）+ 中心核球在 z 上鼓起一点
+    float bulge = exp(-rr * rr * 0.16) * 0.95;
+    nebBulge = bulge;   // 传给分支外的尺寸公式（核球区点更大一点）
+    float diskZ = snoise(vec3(cos(ang) * rr * 0.7, sin(ang) * rr * 0.7, t * 0.12)) * 0.30;
+
+    pos.x = cos(ang) * rr;
+    // 盘面压扁 0.42：侧视角度下让星云读成「盘」而不是「球」
+    pos.y = sin(ang) * rr * 0.42 + diskZ * 0.32;
+    pos.z = diskZ + bulge * 0.45 + (1.0 - bulge) * 0.30 - 1.6;
+
+    // 配色：核心暖黄 → 中段青白 → 外缘紫红，再按封面混一点
+    float tCool = clamp(rr / 5.4, 0.0, 1.0);
+    vec3 coreCol = vec3(1.00, 0.86, 0.58);
+    vec3 midCol  = vec3(0.42, 0.90, 0.98);
+    vec3 edgeCol = vec3(0.76, 0.42, 0.96);
+    vec3 spCol = tCool < 0.5
+      ? mix(coreCol, midCol, tCool * 2.0)
+      : mix(midCol, edgeCol, (tCool - 0.5) * 2.0);
+    vColor = mix(spCol, coverColor, 0.26) * (0.82 + rr * 0.05 + uMid * 0.14);
+
+    // 核球密而亮，臂上中等，臂间空旷处压暗（用散斑做出星尘颗粒感）
+    float armMask = 0.55 + 0.45 * cos(scatter * 9.0);
+    // 核球实、臂上中等、臂间空旷处压暗（散斑给出星尘的颗粒感）。
+    // bulge 的权重给得比 armMask 大得多 —— 星云的第一眼印象全靠中心那个亮核。
+    vAlpha = (0.09 + bulge * 0.66 + (1.0 - tCool) * 0.16 + armMask * 0.13 + uMid * 0.09)
+           * (1.0 - smoothstep(0.90, 1.0, aUv.x));   // 外缘淡出，不留硬边
+    maxRippleAmp = max(maxRippleAmp, bulge * 0.50 + uBass * 0.16 + uTreble * 0.12);
+  }
+
+  // ====================================================
   //  鼠标交互 (仅 SILK)
   // ====================================================
   if (uMouseActive > 0.5 && uPreset < 0.5) {
@@ -580,9 +738,18 @@ void main(){
 
   vBright = 0.92 + maxRippleAmp * 0.55 + uBass * 0.10 + edgeBoost * 0.30 + uEnergy * 0.05 + uBurstAmt * 0.40;
   if (uPreset > 5.5) {
-    // 极光/万花筒/迸发：亮度改由各自的 maxRippleAmp 承担（迸发＝冲击环的相位驱动），
-    // 刻意不接 uBeat —— 那是每拍都会跳的量，会让迸发与迸发之间也在闪。
+    // 极光/万花筒/迸发/声波地形/螺旋星云：亮度改由各自的 maxRippleAmp 承担
+    // （迸发＝冲击环的相位驱动），刻意不接 uBeat —— 那是每拍都会跳的量，
+    // 会让迸发与迸发之间也在闪。
     vBright = 0.94 + maxRippleAmp * 0.72 + uBass * 0.055 + uEnergy * 0.055 + uBurstAmt * 0.26;
+    if (uPreset > 8.5 && uPreset < 9.5) {
+      // 声波地形：亮度主要由「高度」给（分支里已算进 vColor），这里压低额外增益，
+      // 否则脊顶会过曝成一条白线，看不出地形层次。
+      vBright = 0.86 + maxRippleAmp * 0.42 + uBass * 0.045 + uEnergy * 0.030;
+    } else if (uPreset > 9.5) {
+      // 螺旋星云：核球要亮、外缘要暗，靠点的疏密与 vAlpha 表达，亮度增益保持克制。
+      vBright = 0.90 + maxRippleAmp * 0.50 + uBass * 0.040 + uEnergy * 0.035;
+    }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
   } else if (uPreset > 3.5) {
@@ -600,6 +767,15 @@ void main(){
     // （原来的 uBeat*0.30 会让鼓点一来整片幕「炸毛」成大颗粒）。
     float auroraDrive = maxRippleAmp * 0.28 + uBass * 0.10 + uMid * 0.06 + uBeat * 0.10;
     sz = clamp(depthSize * 0.62 * (1.0 + auroraDrive), 0.72, 2.60);
+  } else if (uPreset > 9.5) {
+    // 螺旋星云（SPIRAL）：靠点的**疏密**读旋臂，点太大会把臂糊成一片糊。
+    // 但核球区允许略大一点（bulge 大的地方 maxRippleAmp 也大，天然会让中心点更饱满）。
+    float nebDrive = nebBulge * 0.55 + uBass * 0.08 + uMid * 0.06;
+    sz = clamp(depthSize * 0.58 * (1.0 + nebDrive), 0.66, 3.10);
+  } else if (uPreset > 8.5) {
+    // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
+    // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。
+    sz = clamp(depthSize * 0.52 * (1.0 + uTreble * 0.12), 0.62, 2.30);
   } else if (uPreset > 5.5) {
     // 粒子尺寸同样跟随 maxRippleAmp（迸发＝冲击环所在的那一圈更大），不用 uBeat
     float punchDrive = uBass * 0.075 + uMid * 0.050 + uTreble * 0.070 + maxRippleAmp * 0.30 + uBurstAmt * 0.120;

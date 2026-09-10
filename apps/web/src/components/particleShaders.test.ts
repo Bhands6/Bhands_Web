@@ -312,3 +312,244 @@ describe('极光流星', () => {
     }
   });
 });
+
+describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
+  it('两个预设都注册了 shader 分支（9 用 else if 区间、10 用兜底 else）', () => {
+    // 9 必须写成区间判定，才能给 10 留出 > 9.5 的空间；10 是最后一个分支，用 else 兜底
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 9\.5\)/);
+    // 第八个预设（迸发 8）必须收窄成区间，不能再是裸 else —— 否则 9/10 永远走不到
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 8\.5\)/);
+    const i9 = VERTEX_SHADER.indexOf('else if (uPreset < 9.5)');
+    const i10 = VERTEX_SHADER.indexOf('Preset 10: SPIRAL');
+    expect(i9, '预设 9 的分支必须存在').toBeGreaterThan(-1);
+    expect(i10, '预设 10 的分支必须存在').toBeGreaterThan(i9);
+  });
+
+  /**
+   * ⚠️ SONIC 的地形整块必须落在相机**前方**（z < 0）。
+   *
+   * 相机 radius=9.2 / phi=0.30，若地形有粒子跑到 z >= 0 就会贴到镜头上，
+   * 表现为一块糊在屏幕上的亮斑。这里用「纵深世界坐标 + 整体推远量」静态验算
+   * 最远端（gz=1）与最近端（gz=0）的 z 都小于 0。
+   */
+  it('声波地形的 z 必须整体在相机前方（否则会糊到镜头上）', () => {
+    const mZ = VERTEX_SHADER.match(/float worldZ = \(gz - 0\.5\) \* ([\d.]+);/);
+    const mPush = VERTEX_SHADER.match(/pos\.z = worldZ - ([\d.]+);/);
+    expect(mZ, '未找到 worldZ 定义').toBeTruthy();
+    expect(mPush, '未找到 pos.z 的推远量').toBeTruthy();
+    const halfDepth = Number(mZ![1]) / 2;
+    const push = Number(mPush![1]);
+    // gz=0 → worldZ = -halfDepth；gz=1 → worldZ = +halfDepth；两者都要 +(-push) 后 < 0
+    expect(+halfDepth - push, '最近端（gz=0）跑到了相机后方').toBeLessThan(0);
+    expect(halfDepth - push, '最远端（gz=1）跑到了相机后方').toBeLessThan(0);
+  });
+
+  /**
+   * ⚠️ 不能用 exp(-pow(d, 2.0))。
+   *
+   * GLSL 的 pow 在底数为负时**未定义**，部分驱动直接返回 NaN，
+   * 于是整个扫描波前（进而整个预设）变成 NaN 消失。
+   * 平方必须写成 d * d。
+   */
+  it('声波扫描波前不得用 pow 求平方（负底数 pow 未定义 → NaN）', () => {
+    const sonic = VERTEX_SHADER.slice(
+      VERTEX_SHADER.indexOf('Preset 9: SONIC'),
+      VERTEX_SHADER.indexOf('Preset 10: SPIRAL')
+    ).replace(/\/\/.*$/gm, '');
+    expect(sonic.length, '没截到 SONIC 分支').toBeGreaterThan(100);
+    expect(sonic).not.toMatch(/pow\s*\([^)]*\*\s*[^)]*,\s*2\.0\)/);
+    // 必须是先算差值再自乘
+    expect(sonic).toMatch(/float dz = \(gz - scanPos\) \* [\d.]+;/);
+    expect(sonic).toMatch(/exp\(-dz \* dz\)/);
+  });
+
+  /**
+   * ⚠️ SPIRAL 的半径分布必须是「中心密」，不能用 sqrt（面积均匀）。
+   *
+   * 星云的面亮度从中心向外衰减；用 sqrt 会得到一个中空的甜甜圈
+   * （实测外圈 r 在 4.5~5.4 那段占 33% 的点，而核球只占 3%）。
+   * 正确做法是 pow(aUv.x, >1) 把点往中心压。
+   */
+  it('螺旋星云的半径分布必须向中心聚集（不能用 sqrt 的面积均匀分布）', () => {
+    const spiral = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 10: SPIRAL'));
+    expect(spiral.length, '没截到 SPIRAL 分支').toBeGreaterThan(100);
+    const m = spiral.match(/float rr = pow\(aUv\.x, ([\d.]+)\) \* ([\d.]+)/);
+    expect(m, '未找到半径分布公式').toBeTruthy();
+    expect(Number(m![1]), '半径幂次必须 > 1 才会向中心聚集').toBeGreaterThan(1);
+    expect(spiral).not.toMatch(/float rr = sqrt\(aUv\.x\)/);
+  });
+
+  /**
+   * ⚠️ 核球强度必须在**分支之外**可见。
+   *
+   * nebBulge 是 SPIRAL 分支里算出来的，但粒子尺寸公式在分支之外 ——
+   * 若把变量声明写在分支内，尺寸公式就看不到它（GLSL 编译失败或取到垃圾值）。
+   * 所以必须在所有分支之前先声明并初始化为 0。
+   */
+  it('螺旋星云的核球强度必须在分支外声明并初始化', () => {
+    expect(VERTEX_SHADER).toMatch(/float nebBulge = 0\.0;/);
+    const iDecl = VERTEX_SHADER.indexOf('float nebBulge = 0.0;');
+    const iAssign = VERTEX_SHADER.indexOf('nebBulge = bulge;');
+    const iUse = VERTEX_SHADER.indexOf('uPreset > 9.5', iDecl); // 尺寸档里会用到
+    expect(iAssign, 'SPIRAL 分支里必须把 bulge 传给 nebBulge').toBeGreaterThan(iDecl);
+    expect(iUse, '尺寸公式必须读 nebBulge 才能体现核球').toBeGreaterThan(iAssign);
+  });
+
+  it('两个新预设都有独立的尺寸档与亮度档', () => {
+    // 尺寸：9 要小而均匀（否则脊顶鼓成珠子）、10 允许大一点（靠疏密读旋臂）
+    expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
+    expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
+    // 亮度：两者都要有独立档，不能共用 6~8 的通用档
+    expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5 && uPreset < 9\.5/);
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset > 9\.5\)/);
+  });
+});
+
+describe('声波地形的观感修正（居中 / 起伏 / 无缝循环）', () => {
+  const sonic = () => {
+    const s = VERTEX_SHADER.slice(
+      VERTEX_SHADER.indexOf('Preset 9: SONIC'),
+      VERTEX_SHADER.indexOf('Preset 10: SPIRAL')
+    );
+    expect(s.length, '没截到 SONIC 分支').toBeGreaterThan(100);
+    return s;
+  };
+
+  /**
+   * ⚠️ 地形必须**居中**在 y=0 附近（用户截图：地形整体偏上，下半屏空着）。
+   *
+   * 初版 `pos.y = h` 直接用：h 的三项（ridge / depthFall / bassLift）都偏正，
+   * 实测 h 中轴 +0.51 → 画面里地形挤在上半部。
+   * 修法是显式减一个 centerY，而不是去微调某个系数碰运气。
+   */
+  it('地形必须显式居中（减掉 centerY），不能直接用 h', () => {
+    const s = sonic();
+    // 必须有 centerY 这个显式居中量
+    expect(s, '缺少显式居中量 centerY').toMatch(/float centerY = [\d.]+;/);
+    expect(s, 'centerY 必须实际减进 h').toMatch(/h -= centerY;/);
+    // 居中量要落在合理区间（0.2~0.8），太小平不了偏移、太大把地形压到底部
+    const cy = Number(s.match(/float centerY = ([\d.]+);/)![1]);
+    expect(cy, 'centerY 太小，平不了 h 的正偏').toBeGreaterThan(0.2);
+    expect(cy, 'centerY 太大，会把地形压到画面下部').toBeLessThan(0.8);
+  });
+
+  /**
+   * ⚠️ 纵深项必须是**双向**的（近处抬、远处压），不能用单向的 (1-gz)*k。
+   *
+   * 单向抬升是与 ridge 叠加后把整体顶到 y>0 的元凶之一。
+   * 用 (0.5 - gz) 才能让近端为正、远端为负，形成真正的纵深层次。
+   */
+  it('纵深项必须是双向的（近处抬、远处压），不能用单向抬升', () => {
+    const s = sonic();
+    expect(s, '纵深项必须围绕 0.5 居中').toMatch(/float depthShape = \(0\.5 - gz\) \* [\d.]+;/);
+    // 不允许退回单向写法
+    expect(s).not.toMatch(/float depthFall = \(1\.0 - gz\)/);
+  });
+
+  /**
+   * ⚠️ 上下起伏必须够大（用户反馈"上下范围再大一下"）。
+   *
+   * 初版三层振幅 1.15/0.42/0.14 加起来跨度仅 2.49，视觉上是一条扁带。
+   * 现在放大到 1.28/0.49/0.16 并配套双向纵深，仿真跨度约 5.0（翻倍）。
+   * 这条测试锁住"第一层振幅不能又缩回去"。
+   */
+  it('地形起伏振幅不得缩回初版的小值', () => {
+    const s = sonic();
+    const amps = [...s.matchAll(/snoise\(vec3\(worldX \* [\d.]+, worldZ \* [\d.]+(?: \+ \w+)?, \w+\)\) \* ([\d.]+)/g)].map(
+      (m) => Number(m[1])
+    );
+    expect(amps.length, '没解析出三层噪声振幅').toBe(3);
+    expect(amps[0], '第一层（大起伏）振幅太小，地形会变成扁带').toBeGreaterThanOrEqual(1.2);
+    // 逐层递减（高频低振幅）才像地形
+    expect(amps[0]).toBeGreaterThan(amps[1]);
+    expect(amps[1]).toBeGreaterThan(amps[2]);
+  });
+
+  /**
+   * ⚠️⚠️ 无缝循环：扫描波前必须用 triWave 往复，不能用 fract 硬绕回。
+   *
+   * `fract(t * 0.13)` 每 7.7 秒从 1 **硬跳**回 0 —— 波前从远处瞬移回近处，
+   * 视觉上是一次突兀的抽搐（用户反馈"循环不够连贯"）。
+   * triWave 在两端自然折返，观感是"潮水来回"。
+   */
+  it('扫描波前必须用 triWave 往复，不能用 fract 硬绕回', () => {
+    const s = sonic();
+    expect(s, '扫描位置必须用 triWave').toMatch(/float scanPos = triWave\(/);
+    // 不允许退回 fract 写法
+    expect(s, '扫描波前不得用 fract 做循环（1→0 会硬跳）').not.toMatch(/float scanPos = fract\(/);
+  });
+
+  /**
+   * ⚠️⚠️ 波前位置**绝不能含 uBeat**，无论以何种形式。
+   *
+   * 踩过两次，第二次比第一次隐蔽得多：
+   *   ① 初版 `fract(t*0.13 + uBeat*0.10)` —— uBeat 直接加位移，每拍踹一下；
+   *   ② 「修好版」`t/36.0 * (1.0 + uBeat*0.55)` —— 看着像"只改速度"，实际代数上是
+   *      `t/36 + (t*uBeat*0.55)/36`，第二项**与 t 成正比**。t 是已播放秒数、只增不减，
+   *      所以同一个 uBeat 突变在 t=60s 让相位跳 0.46、到 t=900s 跳 **6.9 个整周期**，
+   *      波前瞬间乱闪（用户报的"抖动"）。**这是个随播放时长线性恶化的 bug。**
+   *
+   * 正解：位置纯 `triWave(t / 36.0)`（跳变恒为 0），uBeat 只用于亮度增益。
+   */
+  it('波前位置绝不含 uBeat（乘在绝对时间上会随播放时长线性恶化）', () => {
+    const s = sonic();
+    // ⚠️ 断言必须基于**剥掉注释**的代码：注释里会写错例做说明，不剥就会被自己的反例命中。
+    const code = s.replace(/\/\/.*$/gm, '');
+    // 位置必须是纯 t/36 的三角波
+    expect(code, '波前位置必须是不含 uBeat 的纯时间函数').toMatch(/float scanPos = triWave\(t \/ [\d.]+\);/);
+    // scanPos 那一行不得出现 uBeat
+    const scanPosLine = code.match(/float scanPos = [^;]+;/)?.[0] ?? '';
+    expect(scanPosLine, 'uBeat 不得以任何形式进入波前位置').not.toContain('uBeat');
+    // 禁止「t / 常数 * (1.0 + uBeat...」这种会把 uBeat 放大成 t 倍的写法
+    expect(code, '不得把 uBeat 乘在绝对时间 t 上（会随 t 放大）').not.toMatch(/t\s*\/\s*[\d.]+\s*\*\s*\(1\.0 \+ uBeat/);
+  });
+
+  /**
+   * uBeat 改为只驱动**亮度**：位置恒定，拍点表现为波前"闪一下"。
+   * 且增益结果必须钳回 [0,1] —— 下游拿 scanBand 当 mix 权重与 alpha 增益，超过 1 会外推过曝。
+   */
+  it('节拍只能调波前亮度（且必须钳回 [0,1]）', () => {
+    const s = sonic();
+    expect(s, 'scanBand 必须带 uBeat 亮度增益').toMatch(
+      /float scanBand = min\(1\.0, exp\(-dz \* dz\) \* \([\d.]+ \+ uBeat \* [\d.]+\)\);/
+    );
+    // 必须有 min(1.0, ...) 钳制
+    expect(s).toMatch(/float scanBand = min\(1\.0,/);
+    // 基准亮度要留出提升空间（不能是 1.0，否则 uBeat 的增益全被钳掉、失去效果）
+    const base = Number(s.match(/float scanBand = min\(1\.0, exp\(-dz \* dz\) \* \(([\d.]+) \+ uBeat/)![1]);
+    expect(base, '基准亮度太接近 1，uBeat 提亮会被钳掉、失去效果').toBeLessThan(0.9);
+    expect(base, '基准亮度太低，波前平时会暗到看不见').toBeGreaterThan(0.5);
+  });
+
+  /**
+   * ⚠️ 地形噪声的时间种子必须是**有界往返**，不能无限线性漂移。
+   *
+   * 旧写法 `snoise(vec3(..., t * 0.16))` 让采样点沿时间轴无限前进 →
+   * 地形永不重复、一直"长成另一张地图"，观感上就是"没有循环"。
+   * 改成 triWave 的有界往返后，地形在同一片山谷里呼吸。
+   */
+  it('地形噪声的时间种子必须有界往返（不能无限线性漂移）', () => {
+    const s = sonic();
+    // 三个时间种子都必须来自 triWave
+    expect(s, '层1 时间种子必须有界').toMatch(/float tSeed1 = triWave\(t \/ [\d.]+\) \* [\d.]+;/);
+    expect(s, '层2 时间种子必须有界').toMatch(/float tSeed2 = triWave\(t \/ [\d.]+\) \* [\d.]+;/);
+    expect(s, '层3 时间种子必须有界').toMatch(/float tSeed3 = triWave\(t \/ [\d.]+\) \* [\d.]+;/);
+    // 噪声调用里不得再出现裸的 t 线性项
+    const noiseCalls = [...s.matchAll(/snoise\(vec3\([^)]*\)\)/g)].map((m) => m[0]);
+    expect(noiseCalls.length).toBe(3);
+    for (const call of noiseCalls) {
+      expect(call, `噪声调用里残留了线性时间漂移: ${call}`).not.toMatch(/\bt \*/);
+    }
+  });
+
+  it('triWave 必须定义在顶点着色器里（且只在顶点用）', () => {
+    // 定义在 VERTEX_SHADER 的公共前缀区（snoise 附近）
+    expect(VERTEX_SHADER).toMatch(/float triWave\(float x\)\{\s*float f = fract\(x\);\s*return abs\(f \* 2\.0 - 1\.0\);/);
+    const iDef = VERTEX_SHADER.indexOf('float triWave(float x)');
+    const iSonic = VERTEX_SHADER.indexOf('Preset 9: SONIC');
+    expect(iDef, 'triWave 必须在 SONIC 分支之前定义').toBeGreaterThan(-1);
+    expect(iDef).toBeLessThan(iSonic);
+    // 片元着色器不需要它（只有顶点算位置）
+    expect(FRAGMENT_SHADER).not.toContain('triWave');
+  });
+});

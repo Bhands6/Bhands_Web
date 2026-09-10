@@ -19,8 +19,9 @@ import {
 
 /**
  * Three.js 粒子舞台 —— 完整移植桌面版 main.js 的 shader 粒子系统：
- * - 9 种预设（uPreset shader 分支）：0 丝绸 / 1 滚筒隧道 / 2 星球 / 3 虚空 / 4 唱片 / 5 星河壁纸
+ * - 11 种预设（uPreset shader 分支）：0 丝绸 / 1 滚筒隧道 / 2 星球 / 3 虚空 / 4 唱片 / 5 星河壁纸
  *   ／ 6 极光 / 7 万花筒 / 8 迸发（换歌爆一次，之后常驻：匀速缓慢自转 + 整片上下浮动）
+ *   ／ 9 声波地形（随音乐起伏的山脊 + 推进扫描波前）/ 10 螺旋星云（双旋臂 + 中心核球）
  * - 封面纹理采样取色（新旧封面 crossfade）+ CPU 端 Sobel 边缘纹理（丝绸轮廓增益）
  * - 涟漪系统：bass 上升沿在 3×3 宫格随机触发 DataTexture 涟漪
  * - 音频包络（attack/release）+ 唱片/壁纸预设专用频段重映射
@@ -67,7 +68,11 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   wallpaper: { radius: 6.6, phi: 0.08 },
   aurora: { radius: 8.4, phi: 0.05 },
   kaleido: { radius: 6.8, phi: 0.07 },
-  burst: { radius: 6.6, phi: 0.06 }
+  burst: { radius: 6.6, phi: 0.06 },
+  // 声波地形：贴地看才读得出「地形」——phi 大一点俯视、半径拉远容纳 13×9 的地块
+  sonic: { radius: 9.2, phi: 0.30 },
+  // 螺旋星云：要能看见整个盘面（半径 5.4 + 外缘），略俯视让盘有厚度
+  spiral: { radius: 10.5, phi: 0.34 }
 };
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -640,8 +645,9 @@ export default function ParticleStage() {
 
       // 唱片(4)/壁纸(5)预设专用频段重映射（对应桌面版 fx.preset >= 4 分支）
       const preset = uniforms.uPreset.value as number;
-      // 极光(6)/万花筒(7)/迸发(8)：不走唱片式的频段重映射，给一份手感更直接的分量，
-      // 再按各自侧重微调（极光偏高、万花筒偏中）。
+      // 极光(6)/万花筒(7)/迸发(8)/声波地形(9)/螺旋星云(10)：不走唱片式的频段重映射，
+      // 给一份手感更直接的分量，再按各自侧重微调（极光偏高、万花筒偏中、
+      // 声波地形偏低频——地形起伏主要靠鼓点、星云偏中频——臂的亮度）。
       // 迸发不再放大 beatPulse —— 那会让相机的拍点冲击在每次鼓点都顶一下，
       // 和「迸发之间应该安静下来」冲突。
       if (preset > 5.5) {
@@ -650,6 +656,15 @@ export default function ParticleStage() {
         treble = Math.pow(clamp01((smoothTreb - 0.02) / 0.30), 0.78) * visual.intensity;
         if (preset < 6.5) mid = Math.min(0.9, mid * 1.15);
         else if (preset < 7.5) treble = Math.min(0.85, treble * 1.12);
+        else if (preset > 8.5 && preset < 9.5) {
+          // 声波地形：抬低音（地面鼓起）、压高音（避免细砂砾闪得比山脊还亮）
+          bass = Math.min(1.0, bass * 1.32);
+          treble = Math.min(0.72, treble * 0.82);
+        } else if (preset > 9.5) {
+          // 螺旋星云：抬中音（旋臂亮度）、压低音（盘面不要随鼓点整体浮动）
+          mid = Math.min(1.0, mid * 1.26);
+          bass = Math.min(0.62, bass * 0.84);
+        }
       } else if (preset >= 4) {
         const wallpaperAudio = preset === 5;
         const ringBass = smoothBass * (wallpaperAudio ? 1.1 : 1.58) + beatEnv * (wallpaperAudio ? 0.18 : 0.42) - smoothMid * 0.16 - smoothTreb * 0.06;
