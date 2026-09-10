@@ -241,12 +241,29 @@ async function resolveOpenMeteoLocation(query: unknown): Promise<WeatherInfo['lo
   };
 }
 
+/** 天气结果缓存：Open-Meteo 免费接口不宜被打爆，当前天气 10 分钟内直接复用 */
+const weatherCache = new Map<string, { data: WeatherInfo; time: number }>();
+const WEATHER_CACHE_TTL = 10 * 60 * 1000;
+
+function weatherCacheKey(params: { city?: string; lat?: string; lon?: string }): string {
+  const lat = Number(params.lat);
+  const lon = Number(params.lon);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    return `ll:${lat.toFixed(2)},${lon.toFixed(2)}`;
+  }
+  return `city:${String(params.city || '').trim().toLowerCase()}`;
+}
+
 /** 拉取当前天气 + 心情（移植桌面版 fetchOpenMeteoWeather） */
 async function fetchOpenMeteoWeather(params: {
   city?: string;
   lat?: string;
   lon?: string;
 }): Promise<WeatherInfo> {
+  const cacheKey = weatherCacheKey(params);
+  const cached = weatherCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < WEATHER_CACHE_TTL) return cached.data;
+
   const lat = clampNumber(params.lat, -90, 90, NaN);
   const lon = clampNumber(params.lon, -180, 180, NaN);
 
@@ -292,6 +309,7 @@ async function fetchOpenMeteoWeather(params: {
     mood: buildWeatherMood({})
   };
   weather.mood = buildWeatherMood(weather);
+  weatherCache.set(cacheKey, { data: weather, time: Date.now() });
   return weather;
 }
 

@@ -7,6 +7,14 @@ services:
     environment:
       - PORT=3001
       - HOST=0.0.0.0
+      # 在根目录 .env 中配置（ADMIN_TOKEN / CORS_ORIGINS / STREAM_HOST_ALLOWLIST / DATA_DIR）
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - STREAM_HOST_ALLOWLIST=${STREAM_HOST_ALLOWLIST:-}
+      - DATA_DIR=${DATA_DIR:-/app/data}
+    volumes:
+      # 登录 cookie 与 LX 脚本存档持久化到宿主机，容器重建不丢
+      - ./data:/app/data
     restart: unless-stopped
 
   # HTTPS 反向代理（备案通过后启用：docker compose --profile caddy up -d）

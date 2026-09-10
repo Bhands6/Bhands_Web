@@ -1,3 +1,11 @@
+// 必须最先执行：加载 .env，后续模块才能读到 ADMIN_TOKEN 等配置
+import './loadEnv';
+
+// LX Music 脚本沙盒内的异步操作（版本检查、网络请求）可能产生未捕获的 rejection；
+// Node.js v24+ 默认对 unhandledRejection 终止进程，这里兜底为日志告警。
+process.on('unhandledRejection', (reason) => {
+  console.warn('[UnhandledRejection] 沙盒异步错误（非致命）:', reason instanceof Error ? reason.message : reason);
+});
 import path from 'node:path';
 import fs from 'node:fs';
 import Fastify from 'fastify';
@@ -10,7 +18,9 @@ import { userRoutes } from './routes/user';
 import { weatherRoutes } from './routes/weather';
 
 const server = Fastify({
-  logger: true
+  logger: true,
+  // Caddy 反代场景下信任 X-Forwarded-*，使 request.protocol/ip 正确（cookie Secure、限流依赖）
+  trustProxy: true
 });
 
 /** 解析前端构建产物目录。
@@ -32,10 +42,20 @@ function resolveWebDist(): string {
 }
 
 async function main() {
-  // 注册 CORS
+  // 注册 CORS：同源请求无需 CORS 头；放行本地开发与 CORS_ORIGINS 白名单（逗号分隔），
+  // 其余来源不下发 ACAO 头（浏览器自行拦截跨域读取）
+  const corsOrigins = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   await server.register(cors, {
-    origin: true,
-    credentials: true
+    credentials: true,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (corsOrigins.includes(origin)) return cb(null, true);
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return cb(null, true);
+      return cb(null, false);
+    }
   });
 
   // 注册路由

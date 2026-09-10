@@ -59,6 +59,14 @@ async function searchAndGetUrl(source: string, searchQuery: string, expected: { 
   return null;
 }
 
+/**
+ * 子音源顺序（实测 2026-09-10，30 首样本）：
+ *  - netease：成功率 100%、时长正确率 100%、FLAC ~1336k ← 最优，放最前
+ *  - joox   ：成功率 ~20%、命中时为 FLAC（~1484k）
+ *  - tidal  ：实测 0/20 全部失败，已移除（保留只会增加失败延迟）
+ */
+const GD_SOURCES = ['netease', 'joox'];
+
 export async function parseFromGDMusic(params: {
   name: string; artists: string[]; quality?: string; timeout?: number;
 }): Promise<{ url: string; quality: string; trial: boolean; size: number } | null> {
@@ -66,7 +74,7 @@ export async function parseFromGDMusic(params: {
   const searchQuery = (name + ' ' + (artists || []).join(' ')).trim();
   if (searchQuery.length < 2) return null;
   const expected = { name, artists: artists || [] };
-  const sources = ['joox', 'tidal', 'netease'];
+  const sources = GD_SOURCES;
   const race = new Promise<null>((r) => setTimeout(() => r(null), timeout));
   const work = (async () => {
     for (const src of sources) {

@@ -2,8 +2,10 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import NcmApiDefault from 'NeteaseCloudMusicApi';
 import { resolveSongUrl } from '../services/musicParser';
-import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners } from '../services/music-sources/lxMusicRunner';
+import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners, canAddScript } from '../services/music-sources/lxMusicRunner';
 import { getNeteaseCookie } from '../neteaseSession';
+import { assertAdmin } from '../adminAuth';
+import { limitedByIp } from '../rateLimit';
 
 // NCM 自带类型过于严格（body 字段均为 unknown），路由层按宽松类型调用
 const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
@@ -34,14 +36,73 @@ function mapNcmSong(s: any): SongItem {
   };
 }
 
-/** 前端音质档位 → 网易云 level */
-const QUALITY_LEVEL: Record<string, string> = {
-  jymaster: 'jymaster',
-  hires: 'hires',
-  lossless: 'lossless',
-  exhigh: 'exhigh',
-  standard: 'standard'
-};
+// ============================================================
+// 音频流代理：同源化外站音源 + SSRF 防护
+// ============================================================
+/** 允许代理的音源 CDN 域名后缀（匹配自身或任意子域） */
+const DEFAULT_STREAM_HOSTS = [
+  'music.126.net',   // 网易云 CDN（官方/pyncmd）
+  'migu.cn',         // 咪咕
+  'kugou.com',       // 酷狗
+  'kuwo.cn',         // 酷我
+  'qqmusic.qq.com',  // QQ 音乐
+  'joox.com',        // GDMusic joox 源
+  'tidal.com'        // GDMusic tidal 源
+];
+
+function streamHostAllowlist(): string[] {
+  const extra = (process.env.STREAM_HOST_ALLOWLIST || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return [...DEFAULT_STREAM_HOSTS, ...extra];
+}
+
+function isAllowedStreamHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return streamHostAllowlist().some((d) => h === d || h.endsWith('.' + d));
+}
+
+/**
+ * 抓取上游音频。逐跳校验重定向目标域名（redirect: manual），
+ * 仅对响应头限时（超时后清除），音频 body 可长时间流式传输。
+ */
+async function fetchUpstreamAudio(rawUrl: string, range?: string): Promise<Response> {
+  let url = new URL(rawUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`不支持的协议: ${url.protocol}`);
+  }
+
+  for (let hop = 0; hop < 4; hop++) {
+    if (!isAllowedStreamHost(url.hostname)) {
+      throw new Error(`音源域名不在白名单: ${url.hostname}`);
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15000);
+    try {
+      const res = await fetch(url, {
+        signal: ac.signal,
+        redirect: 'manual',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          ...(range ? { Range: range } : {})
+        }
+      });
+      if ([301, 302, 303, 307, 308].includes(res.status)) {
+        const loc = res.headers.get('location');
+        res.body?.cancel().catch(() => {});
+        if (!loc) throw new Error('上游重定向缺少 Location');
+        url = new URL(loc, url);
+        continue;
+      }
+      return res;
+    } finally {
+      // fetch 已返回（含重定向响应）：清除头超时，body 流式传输不受影响
+      clearTimeout(timer);
+    }
+  }
+  throw new Error('上游重定向次数过多');
+}
 
 export async function musicRoutes(fastify: FastifyInstance) {
   // 音频流代理：转发外站音源为同源响应，透传 Range 头以支持拖动进度条
@@ -50,18 +111,14 @@ export async function musicRoutes(fastify: FastifyInstance) {
     if (!url || !/^https?:\/\//i.test(url)) {
       return reply.status(400).send({ success: false, error: '缺少有效的音源地址' });
     }
+    if (!limitedByIp(request, 'stream', 60, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
 
     try {
-      const upstream = await fetch(url, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          ...(request.headers.range ? { Range: request.headers.range } : {})
-        },
-        redirect: 'follow'
-      });
-
-      if (!upstream.body || (upstream.status !== 200 && upstream.status !== 206)) {
+      const upstream = await fetchUpstreamAudio(url, request.headers.range);
+      if (upstream.status !== 200 && upstream.status !== 206) {
+        upstream.body?.cancel().catch(() => {});
         return reply.status(502).send({ success: false, error: `音源上游返回 ${upstream.status}` });
       }
 
@@ -71,9 +128,11 @@ export async function musicRoutes(fastify: FastifyInstance) {
         if (value) reply.header(header, value);
       }
       return reply.send(Readable.fromWeb(upstream.body as any));
-    } catch (error) {
-      fastify.log.error(error);
-      return reply.status(502).send({ success: false, error: '音源代理失败' });
+    } catch (error: any) {
+      fastify.log.warn(error, 'stream 代理失败');
+      const msg = error?.message || '';
+      const status = msg.includes('白名单') || msg.includes('协议') ? 400 : 502;
+      return reply.status(status).send({ success: false, error: `音源代理失败: ${msg}` });
     }
   });
 
@@ -87,6 +146,9 @@ export async function musicRoutes(fastify: FastifyInstance) {
 
     if (!keyword || !keyword.trim()) {
       return reply.status(400).send({ success: false, error: '缺少搜索关键词' });
+    }
+    if (!limitedByIp(request, 'search', 30, 60_000)) {
+      return reply.status(429).send({ success: false, error: '搜索过于频繁，请稍后再试' });
     }
 
     try {
@@ -125,14 +187,35 @@ export async function musicRoutes(fastify: FastifyInstance) {
   // 获取歌曲播放链接（VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方）
   fastify.get('/song/:id/url', async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
-    const { quality = 'exhigh', vip } = request.query as { quality?: string; vip?: string };
+    const { quality = 'exhigh', vip, fresh } = request.query as { quality?: string; vip?: string; fresh?: string };
     const cookie = getNeteaseCookie(request);
 
+    if (!limitedByIp(request, 'songurl', 60, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+
     try {
+      // 预取歌曲详情：GDMusic / LX 脚本（kw/mg/kg）按歌名匹配，缺失元数据时这些通道全部失效
+      let name = '';
+      let artists: string[] = [];
+      let detail: any;
+      try {
+        const res = await NcmApi.song_detail({ ids: id, cookie });
+        detail = res.body?.songs?.[0];
+        if (detail) {
+          name = detail.name || '';
+          artists = (detail.ar || []).map((a: any) => a.name).filter(Boolean);
+        }
+      } catch { /* 元数据拉取失败不阻塞解析，第三方按缺省信息降级 */ }
+
       const result = await resolveSongUrl({
-        id, name: '', artists: [], quality,
+        id, name, artists, detail, quality,
+        // 时长（ms）供音源脚本换算 interval，缺失会导致匹配到错版本
+        durationMs: detail?.dt || 0,
         vip: vip === 'true' || vip === '1',
-        cookie
+        cookie,
+        // fresh=1：绕过成功缓存重新解析（前端播放失败重试时使用，规避缓存的过期直链）
+        bypassCache: fresh === '1' || fresh === 'true'
       });
       if (result) {
         return { success: true, data: result };
@@ -144,12 +227,18 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // ---- LX Music 脚本管理 ----
+  // ---- LX Music 脚本管理（写操作需 ADMIN_TOKEN，见 adminAuth.ts）----
 
   // 上传 LX Music 脚本
   fastify.post('/parse/lx/upload', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!assertAdmin(request, reply)) return;
+    if (!limitedByIp(request, 'lxupload', 10, 60_000)) {
+      return reply.status(429).send({ success: false, error: '操作过于频繁' });
+    }
     const { script, name } = request.body as { script?: string; name?: string };
     if (!script) return reply.status(400).send({ success: false, error: '缺少脚本内容' });
+    if (script.length > 512_000) return reply.status(400).send({ success: false, error: '脚本过大（上限 500KB）' });
+    if (!canAddScript()) return reply.status(400).send({ success: false, error: '脚本数量已达上限（12 个），请先删除不用的脚本' });
     const scriptId = 'lx_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     const scriptName = name || 'LX Music 脚本 ' + scriptId;
     try {
@@ -163,13 +252,14 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 获取脚本列表
+  // 获取脚本列表（只读，无需令牌）
   fastify.get('/parse/lx/list', async () => {
     return { success: true, data: listLxRunners() };
   });
 
   // 激活脚本
   fastify.post('/parse/lx/activate', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!assertAdmin(request, reply)) return;
     const { id } = request.body as { id?: string };
     if (!id || !setActiveRunner(id)) {
       return reply.status(404).send({ success: false, error: '脚本不存在' });
@@ -179,6 +269,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
 
   // 删除脚本
   fastify.post('/parse/lx/delete', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!assertAdmin(request, reply)) return;
     const { id } = request.body as { id?: string };
     if (!id) return reply.status(400).send({ success: false, error: '缺少脚本 ID' });
     removeRunner(id);

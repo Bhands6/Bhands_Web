@@ -1,0 +1,22 @@
+# 依赖：镜像内用 npm ci 重新安装，绝不能把本地 node_modules 带进构建层
+node_modules
+**/node_modules
+
+# 版本库与本地运行数据
+.git
+.gitignore
+data
+**/data
+
+# 构建产物（镜像内重新构建）
+dist
+**/dist
+
+# 证书、部署包与杂项
+certs
+*.tar.gz
+*.log
+.env
+.dockerignore
+Dockerfile
+docker-compose.yml

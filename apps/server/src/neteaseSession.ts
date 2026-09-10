@@ -7,10 +7,11 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { ensureDataDir } from './dataDir';
 
 const SID_NAME = 'bhands_sid';
 const SESSION_TTL_MS = 7 * 24 * 3600 * 1000; // 7 天未活动过期
-const COOKIE_FILE = path.resolve(import.meta.dirname ?? '.', '../data/ncm-cookies.json');
+const COOKIE_FILE = path.join(ensureDataDir(), 'ncm-cookies.json');
 
 interface SessionEntry {
   cookie: string;
@@ -85,9 +86,11 @@ export function ensureSid(request: FastifyRequest, reply: FastifyReply): string 
   const existing = parseSid(request);
   if (existing) return existing;
   const sid = randomUUID();
+  // HTTPS 部署（Caddy 反代 + trustProxy）下附加 Secure，防止会话 ID 走明文外泄
+  const secure = request.protocol === 'https' ? '; Secure' : '';
   reply.header(
     'Set-Cookie',
-    `${SID_NAME}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+    `${SID_NAME}=${sid}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   );
   return sid;
 }

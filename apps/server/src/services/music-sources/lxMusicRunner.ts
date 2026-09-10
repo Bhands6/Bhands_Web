@@ -2,18 +2,36 @@ import vm from 'node:vm';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import https from 'node:https';
+import zlib from 'node:zlib';
+import { ensureDataDir } from '../../dataDir';
 
-const SOURCE_NAMES: Record<string, string> = { wy: '网易云', kw: '酷我', mg: '咪咕', kg: '酷狗', tx: 'QQ音乐' };
 const QUALITY_MAP: Record<string, string> = { standard: '128k', higher: '320k', exhigh: '320k', lossless: 'flac', hires: 'flac', jymaster: 'flac' };
 const QUALITY_CASCADE = ['flac', '320k', '128k'];
+/** 旧版脚本（自带 sources）音源优先级：按实测正确率排序 */
+const LX_SOURCE_PRIORITY = ['wy', 'kw', 'kg', 'tx', 'mg'];
+/** 事件式脚本显式请求顺序：wy 实测 100% 正确，kw 仅 60%（脚本默认落到 kw） */
+const EVENT_SOURCE_ORDER = ['wy', 'kw'];
+/** 持久化脚本数量上限（防磁盘填充与启动时间膨胀） */
+const MAX_SCRIPTS = 12;
 
 function getQualityCascade(quality: string): string[] {
   const mapped = QUALITY_MAP[quality] || '320k';
   const idx = QUALITY_CASCADE.indexOf(mapped);
   return idx < 0 ? [mapped] : QUALITY_CASCADE.slice(idx);
+}
+
+/** 解析脚本头部 @name/@version 等注释字段（对齐真实 LX 客户端的 currentScriptInfo） */
+function parseScriptInfo(script: string): Record<string, string> {
+  const info: Record<string, string> = {};
+  const re = /@(name|description|version|author|homepage)\s+(.+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(script))) {
+    const k = m[1].toLowerCase();
+    if (!info[k]) info[k] = m[2].trim();
+  }
+  return info;
 }
 
 function sandboxHttpRequest(url: string, options: any = {}): Promise<{ status: number; headers: any; body: string }> {
@@ -42,6 +60,90 @@ function sandboxHttpRequest(url: string, options: any = {}): Promise<{ status: n
   });
 }
 
+/** AES key/iv 宽松解析：Buffer 直用；字符串优先按 hex，非法 hex 回退 utf8 */
+function toBuf(v: any): Buffer {
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof Uint8Array) return Buffer.from(v);
+  if (typeof v === 'string') {
+    if (v.length > 0 && /^[0-9a-fA-F]+$/.test(v) && v.length % 2 === 0) {
+      const hex = Buffer.from(v, 'hex');
+      if (hex.length * 2 === v.length) return hex;
+    }
+    return Buffer.from(v, 'utf8');
+  }
+  return Buffer.from(String(v), 'utf8');
+}
+
+/** 伪造的 Buffer 视图：把宿主 Buffer 的常用方法收窄后暴露给沙盒，
+ *  避免 Buffer 构造器本身（可经 .constructor 逃逸到宿主 realm）直接进入沙盒 */
+function bufferView(buf: Buffer): any {
+  return {
+    toString: (enc?: string) => buf.toString((enc as any) || 'utf8'),
+    length: buf.length,
+    slice: (a?: number, b?: number) => bufferView(buf.subarray(a, b)),
+    bufToArray: () => Array.from(buf)
+  };
+}
+
+/**
+ * 沙盒预置脚本：在沙盒 realm 内部安装 console/定时器/lx API/module。
+ * 所有包装函数都在沙盒内创建，桥接对象只经闭包触达、不直接暴露，
+ * 避免把宿主函数原型（fn.constructor === 宿主 Function）泄露为逃逸通道。
+ * 整体包裹在 IIFE 中：顶层 const/let 会留在沙盒全局词法作用域，
+ * 会与用户脚本自身的同名顶层声明（如 const b）冲突。
+ */
+const SANDBOX_PRELUDE = `
+(() => {
+const b = globalThis.__bridge;
+globalThis.console = { log(){}, warn(){}, error(){}, info(){}, debug(){} };
+globalThis.setTimeout = (fn, ms, ...args) => b.setTimeout(fn, ms, ...args);
+globalThis.clearTimeout = (t) => b.clearTimeout(t);
+globalThis.setInterval = (fn, ms, ...args) => b.setInterval(fn, ms, ...args);
+globalThis.clearInterval = (t) => b.clearInterval(t);
+globalThis.fetch = (url, opts) => b.httpRequest(String(url), opts || {});
+globalThis.module = { exports: {} };
+globalThis.exports = globalThis.module.exports;
+const ci = b.scriptInfo;
+globalThis.lx = {
+  EVENT_NAMES: { inited: 'inited', request: 'request', updateAlert: 'updateAlert' },
+  version: '2.9.0',
+  // 对齐真实 LX 客户端（lxmusic.toside.cn 自定义源文档）：currentScriptInfo 含头部注释字段与 rawScript；
+  // 加载器类脚本（如 grass）依赖 rawScript 提取内置配置，缺失会直接 undefined.trim() 崩溃
+  currentScriptInfo: {
+    name: ci.name || '', description: ci.description || '', version: ci.version || '',
+    author: ci.author || '', homepage: ci.homepage || '', rawScript: ci.rawScript || ''
+  },
+  env: 'node',
+  utils: {
+    buffer: {
+      from: (s, enc) => b.bufFrom(s, enc),
+      bufToString: (buf, enc) => b.bufToString(buf, enc)
+    },
+    crypto: {
+      md5: (str) => b.md5(str),
+      randomBytes: (size) => b.randomBytes(size),
+      rsaEncrypt: (data, key) => b.rsaEncrypt(data, key),
+      aesEncrypt: (data, mode, key, iv) => b.aesEn(data, mode, key, iv),
+      aesEn: (data, mode, key, iv) => b.aesEn(data, mode, key, iv),
+      aesDe: (data, mode, key, iv) => b.aesDe(data, mode, key, iv),
+      aesDecrypt: (data, mode, key, iv) => b.aesDe(data, mode, key, iv)
+    },
+    zlib: {
+      inflate: (buf) => b.zlibInflate(buf),
+      deflate: (buf) => b.zlibDeflate(buf)
+    }
+  },
+  request: (url, opts, cb) => b.request(String(url), opts || {}, cb),
+  on: (event, handler) => { (b.handlers[event] = b.handlers[event] || []).push(handler); },
+  send: (event, ...args) => {
+    const hs = b.handlers[event] || [];
+    return hs.length ? hs[0](...args) : undefined;
+  }
+};
+delete globalThis.__bridge;
+})();
+`;
+
 class LxMusicRunner {
   private _sources: Record<string, any> = {};
   private _lxApi: any = null;
@@ -53,70 +155,106 @@ class LxMusicRunner {
     try {
       this._scriptName = scriptName || 'unknown';
 
-      // LX Music 兼容事件总线
+      // 事件处理器注册表：宿主持有引用，用于探测事件式脚本与后续回调
       const lxEventHandlers: Record<string, Function[]> = {};
-      const lxApi: any = {
-        EVENT_NAMES: { inited: 'inited', request: 'request', updateAlert: 'updateAlert' },
-        version: '2.9.0',
-        currentScriptInfo: { version: '1' },
-        env: 'node',
-        request: (url: string, opts: any, cb: Function) => {
-          const method = (opts?.method || 'GET').toUpperCase();
-          const headers = opts?.headers || {};
-          const body = opts?.body;
-          const urlObj = new URL(url);
-          const isHttps = urlObj.protocol === 'https:';
-          const client = isHttps ? https : http;
-          const reqOpts: any = { hostname: urlObj.hostname, port: urlObj.port || (isHttps ? 443 : 80), path: urlObj.pathname + urlObj.search, method, headers, timeout: 15000 };
-          const req = client.request(reqOpts, (res: any) => {
-            let data = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk: string) => { data += chunk; });
-            res.on('end', () => {
-              let parsed: any = data;
-              try { parsed = JSON.parse(data); } catch {}
-              res.body = parsed;
-              cb(null, res, parsed);
-            });
-          });
-          req.on('error', (e: Error) => cb(e));
-          req.on('timeout', () => { req.destroy(); cb(new Error('timeout')); });
-          if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
-          req.end();
-        },
-        on: (event: string, handler: Function) => { (lxEventHandlers[event] ||= []).push(handler); },
-        send: (event: string, ...args: any[]) => { const handlers = lxEventHandlers[event] || []; return handlers.length ? handlers[0](...args) : undefined; },
-        utils: {
-          buffer: { bufToString: (buf: any, enc: string) => Buffer.from(buf).toString(enc as any) },
-          crypto: { hash: (algo: string, data: string) => crypto.createHash(algo).update(data).digest('hex') }
-        }
-      };
-
-      const sandbox: any = {
-        console: { log: () => {}, warn: () => {}, error: () => {} },
-        setTimeout, clearTimeout, setInterval, clearInterval,
-        Promise, Date, Math, JSON, RegExp, Array, Object, String, Number, Boolean,
-        Error, TypeError, RangeError,
-        encodeURIComponent, decodeURIComponent, parseInt, parseFloat, isNaN, isFinite,
-        Buffer,
-        fetch: sandboxHttpRequest,
-        module: { exports: {} },
-        exports: {},
-        globalThis: {} as any,
-        global: {} as any
-      };
-      sandbox.globalThis = sandbox;
-      sandbox.global = sandbox;
-      sandbox.lx = lxApi;
-      sandbox.globalThis.lx = lxApi;
-
-      this._lxApi = lxApi;
       this._lxHandlers = lxEventHandlers;
 
-      const context = vm.createContext(sandbox);
+      // 桥接对象：脚本触达宿主能力的唯一入口（定时器/网络/摘要）。
+      // 注意 vm 不是安全边界，脚本可信性由路由层的 ADMIN_TOKEN 鉴权保证；
+      // 这里不再向沙盒注入宿主 realm 的 Object/Error/Buffer 等构造器，
+      // 堵住 e.constructor.constructor('return process')() 这类一行逃逸。
+      const bridge = {
+        handlers: lxEventHandlers,
+        setTimeout, clearTimeout, setInterval, clearInterval,
+        httpRequest: sandboxHttpRequest,
+        scriptInfo: { ...parseScriptInfo(scriptContent), rawScript: scriptContent },
+        request: (url: string, opts: any, cb: Function) => {
+          try {
+            const urlObj = new URL(url);
+            const isHttps = urlObj.protocol === 'https:';
+            const client = isHttps ? https : http;
+            const method = (opts?.method || 'GET').toUpperCase();
+            const headers: any = { ...(opts?.headers || {}) };
+            let body = opts?.body;
+            // 对齐 lx.request 契约：form → urlencoded，formData → 简单 multipart
+            if (opts?.form && typeof opts.form === 'object') {
+              body = new URLSearchParams(opts.form).toString();
+              headers['Content-Type'] ||= 'application/x-www-form-urlencoded';
+            } else if (opts?.formData && typeof opts.formData === 'object') {
+              const boundary = '----lxform' + crypto.randomBytes(8).toString('hex');
+              const parts: string[] = [];
+              for (const [k, v] of Object.entries(opts.formData)) {
+                parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${String(v)}\r\n`);
+              }
+              parts.push(`--${boundary}--\r\n`);
+              body = parts.join('');
+              headers['Content-Type'] ||= `multipart/form-data; boundary=${boundary}`;
+            }
+            const reqOpts: any = {
+              hostname: urlObj.hostname,
+              port: urlObj.port || (isHttps ? 443 : 80),
+              path: urlObj.pathname + urlObj.search,
+              method,
+              headers,
+              timeout: opts?.timeout || 15000
+            };
+            const req = client.request(reqOpts, (res: any) => {
+              let data = '';
+              res.setEncoding('utf8');
+              res.on('data', (chunk: string) => { data += chunk; });
+              res.on('end', () => {
+                let parsed: any = data;
+                try { parsed = JSON.parse(data); } catch {}
+                res.body = parsed;
+                cb(null, res, parsed);
+              });
+            });
+            req.on('error', (e: Error) => cb(e));
+            req.on('timeout', () => { req.destroy(); cb(new Error('timeout')); });
+            if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+            req.end();
+            // 契约：返回取消函数
+            return () => req.destroy();
+          } catch (e: any) {
+            cb(e);
+            return () => {};
+          }
+        },
+        bufFrom: (s: any, enc?: string) => bufferView(Buffer.from(s, (enc as any) || 'utf8')),
+        bufToString: (buf: any, enc: string) => {
+          const b = Buffer.isBuffer(buf) ? buf : (buf?.bufToArray ? Buffer.from(buf.bufToArray()) : Buffer.from(String(buf)));
+          return b.toString((enc as any) || 'utf8');
+        },
+        md5: (str: any) => crypto.createHash('md5').update(toBuf(str)).digest('hex'),
+        randomBytes: (size: number) => bufferView(crypto.randomBytes(size)),
+        rsaEncrypt: (data: any, key: any) => {
+          const pem = Buffer.isBuffer(key) ? key : Buffer.from(String(key));
+          return bufferView(crypto.publicEncrypt({ key: pem, padding: crypto.constants.RSA_PKCS1_PADDING }, toBuf(data)));
+        },
+        aesEn: (data: any, mode: string, key: any, iv: any) => {
+          const cipher = crypto.createCipheriv(mode, toBuf(key), iv != null ? toBuf(iv) : null);
+          return bufferView(Buffer.concat([cipher.update(toBuf(data)), cipher.final()]));
+        },
+        aesDe: (data: any, mode: string, key: any, iv: any) => {
+          const decipher = crypto.createDecipheriv(mode, toBuf(key), iv != null ? toBuf(iv) : null);
+          return bufferView(Buffer.concat([decipher.update(toBuf(data)), decipher.final()]));
+        },
+        zlibInflate: (buf: any) => new Promise((resolve, reject) => {
+          zlib.inflate(toBuf(buf), (e, r) => e ? reject(e) : resolve(bufferView(r)));
+        }),
+        zlibDeflate: (buf: any) => new Promise((resolve, reject) => {
+          zlib.deflate(toBuf(buf), (e, r) => e ? reject(e) : resolve(bufferView(r)));
+        })
+      };
+
+      const context = vm.createContext({});
+      (context as any).__bridge = bridge;
+      vm.runInContext(SANDBOX_PRELUDE, context, { timeout: 5000 });
+      this._lxApi = (context as any).lx;
+
       vm.runInContext(scriptContent, context, { timeout: 15000 });
 
-      // 新版脚本：通过 globalThis.lx 事件式注册
+      // 新版脚本：通过 lx.on(request) 事件式注册
       if (lxEventHandlers['request']?.length) {
         this._initialized = true;
         this._sources = { _lxEvent: true } as any;
@@ -124,8 +262,8 @@ class LxMusicRunner {
         return true;
       }
 
-      // 旧版脚本：module.exports 导出 sources
-      const exported = sandbox.module.exports || sandbox.exports || {};
+      // 旧版脚本：module.exports 导出 sources（module 由预置脚本在沙盒内创建）
+      const exported = (context as any).module?.exports || {};
       if (exported.sources && typeof exported.sources === 'object') {
         this._sources = exported.sources;
       } else if (exported.default?.sources) {
@@ -187,18 +325,11 @@ class LxMusicRunner {
 // ============================================================
 // 持久化（脚本存盘，重启自动加载）
 // ============================================================
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SCRIPTS_FILE = path.resolve(__dirname, '../../../../data/lx-scripts.json');
+const SCRIPTS_FILE = path.join(ensureDataDir(), 'lx-scripts.json');
 
 interface PersistedScript { id: string; name: string; script: string; }
 
-function ensureDataDir() {
-  const dir = path.dirname(SCRIPTS_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function saveScripts() {
-  ensureDataDir();
   const list: PersistedScript[] = Object.keys(_runners).map(id => {
     const r = _scriptsStore[id];
     return r ? { id, name: r.name, script: r.script } : null;
@@ -240,6 +371,10 @@ export async function initRunner(scriptId: string, scriptContent: string, script
   return null;
 }
 
+export function canAddScript(): boolean {
+  return Object.keys(_runners).length < MAX_SCRIPTS;
+}
+
 export function setActiveRunner(scriptId: string): boolean {
   if (_runners[scriptId]) { _activeRunnerId = scriptId; return true; }
   return false;
@@ -273,28 +408,30 @@ export async function parseFromLxMusic(params: {
   if (!runner?.isInitialized()) return null;
   const available = runner.getAvailableSourceKeys();
   if (!available.length) return null;
-  const sourcePriority = ['wy', 'kw', 'mg', 'kg', 'tx'];
-  let best = sourcePriority.find((s) => available.includes(s)) || available[0];
+  const isEvent = available.length === 1 && available[0] === '_lxEvent';
+
+  /**
+   * 事件式脚本内部按 `source` 字段路由到具体音源，**默认落到 kw**。
+   * 实测（热歌榜 + 飙升榜各 10 首）：wy 成功率 100% / 时长正确率 100% / 320k；
+   * kw 成功率 100% 但时长正确率仅 60%（常匹配到 MV 或翻唱版本，例：海屿你 296s → 72s）。
+   * 故事件式脚本显式按 wy → kw 顺序请求，不再依赖脚本的默认路由。
+   * 另：mg / kg / tx 实测返回 HTML 404 / JSON 401（非音频），排在最后，由上层非音频校验拦下。
+   */
+  const order = isEvent
+    ? EVENT_SOURCE_ORDER
+    : [...LX_SOURCE_PRIORITY.filter((s) => available.includes(s)), ...available.filter((s) => !LX_SOURCE_PRIORITY.includes(s))];
+
   const minutes = Math.floor(duration / 60000);
   const seconds = Math.floor((duration % 60000) / 1000);
   const interval = String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
   const songInfo = { songmid: String(id), name: name || '', singer: artists || '', album, interval, img: '' };
   const cascade = getQualityCascade(quality);
   for (const lxQ of cascade) {
-    // 事件式脚本：直接请求（脚本内部处理音源路由）
-    if (available.length === 1 && available[0] === '_lxEvent') {
-      const url = await runner.getMusicUrl('_lxEvent', songInfo, lxQ);
-      if (url) return { url, source: 'lx-event', quality: lxQ };
-    } else {
-      const url = await runner.getMusicUrl(best, songInfo, lxQ);
-      if (url) return { url, source: 'lx-' + best, quality: lxQ };
-      for (const src of available) {
-        if (src === best) continue;
-        try {
-          const altUrl = await runner.getMusicUrl(src, songInfo, lxQ);
-          if (altUrl) return { url: altUrl, source: 'lx-' + src, quality: lxQ };
-        } catch { /* next */ }
-      }
+    for (const src of order) {
+      try {
+        const url = await runner.getMusicUrl(src, songInfo, lxQ);
+        if (url) return { url, source: 'lx-' + src, quality: 'lx-' + lxQ };
+      } catch { /* next */ }
     }
   }
   return null;
