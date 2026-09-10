@@ -289,7 +289,7 @@ function saveSessionSnapshot(force = false) {
   try {
     // blob: 是本地导入的临时地址，刷新后失效 → 存盘时清空，恢复后播放时重新解析
     const persistable = playlist.map((t) =>
-      t.url && t.url.startsWith('blob:') ? { ...t, url: '' } : t
+      t.url && (t.url.startsWith('blob:') || t.url.startsWith('/api/')) ? { ...t, url: '' } : t
     );
     sessionStorage.setItem(SESSION_KEY, JSON.stringify({
       playlist: persistable,

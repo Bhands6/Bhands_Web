@@ -1,5 +1,7 @@
 import { musicApi, SongItem } from '../api/music';
 import { AudioTrack } from '../audio/AudioEngine';
+import { beatClock } from '../audio/beatClock';
+import { analyzeTrackBeatMap } from '../audio/beatAnalyzer';
 import { usePlayerStore, readSessionSnapshot, flushSessionSnapshot } from '../stores/usePlayerStore';
 import { usePlaylistStore } from '../stores/usePlaylistStore';
 import { useLyricsStore } from '../stores/useLyricsStore';
@@ -21,12 +23,13 @@ export function songItemToTrack(song: SongItem): AudioTrack {
   };
 }
 
-/** 解析播放地址（服务端 VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方） */
-async function resolveTrackUrl(id: string): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
+/** 解析播放地址（服务端 VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方）
+ *  fresh=true 绕过服务端成功缓存重新解析，用于播放失败重试（缓存的时效直链可能已过期） */
+async function resolveTrackUrl(id: string, fresh = false): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
   const { quality } = useUIStore.getState();
   const { user } = useUserStore.getState();
   try {
-    const response = await musicApi.getSongUrl(id, quality, !!user?.vip);
+    const response = await musicApi.getSongUrl(id, quality, !!user?.vip, fresh);
     if (response.success && response.data?.url) {
       return { url: response.data.url, trial: response.data.trial, quality: response.data.quality };
     }
@@ -72,6 +75,18 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
     Math.round(hue2rgb(p, q, h) * 255),
     Math.round(hue2rgb(p, q, h - 1 / 3) * 255)
   ];
+}
+
+/** '#rrggbb' 或 'rgb(r,g,b)' → [r,g,b]（同时支持两种写法，避免 hex 分支解析失败） */
+export function parseColorToRgb(color: string): [number, number, number] | null {
+  const hex = color.match(/^#([0-9a-f]{6})$/i);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const nums = color.match(/\d+/g);
+  if (nums && nums.length >= 3) return [Number(nums[0]), Number(nums[1]), Number(nums[2])];
+  return null;
 }
 
 /**
@@ -130,11 +145,12 @@ function applyCoverTint(cover: string): void {
       }
 
       const tint = `rgb(${r},${g},${b})`;
-      // 辉光跟随提亮后的歌词色（桌面版 glow 取 c1 而非原始封面色），暗封面下不再发暗
-      const glowMatch = lyricColor.match(/\d+/g);
-      const glow = glowMatch
-        ? `rgba(${glowMatch[0]},${glowMatch[1]},${glowMatch[2]},.55)`
-        : `rgba(${r},${g},${b},.6)`;
+      // 辉光必须取**提亮后的歌词色**（桌面版 glow 取 c1 而非原始封面色）。
+      // 注意：银蓝兜底分支的 lyricColor 是 '#d8f1ff'（hex），若用 /\d+/ 取分量会解析失败，
+      // 从而退回「封面原始色」—— 而该分支恰恰是封面色偏暗时才走，暗色发光在深色舞台上完全不可见，
+      // 表现为「歌词有跳动但没有溢光」。这里统一解析 hex / rgb() 两种写法。
+      const glowRgb = parseColorToRgb(lyricColor) ?? [r, g, b];
+      const glow = `rgba(${glowRgb[0]},${glowRgb[1]},${glowRgb[2]},.62)`;
       document.documentElement.style.setProperty('--visual-tint', tint);
       document.documentElement.style.setProperty('--stage-lyric-glow', glow);
       document.documentElement.style.setProperty('--stage-lyric-color', lyricColor);
@@ -144,6 +160,36 @@ function applyCoverTint(cover: string): void {
     }
   };
   img.src = cover;
+}
+
+/** 离线节拍分析启动延迟（对应桌面版 beatAnalysisConfig.delayMs = 1600）：
+ *  切歌后立刻拉整曲会与音频首帧缓冲抢带宽，延后一点再分析。 */
+const BEAT_ANALYSIS_DELAY_MS = 1600;
+
+/**
+ * 离线节拍分析（桌面版 dj-analyzer 移植）：解析整曲生成 BeatMap，
+ * 完成后装入节拍时钟驱动歌词溢光；失败静默（保持实时分析兜底）。
+ *
+ * - 延后 BEAT_ANALYSIS_DELAY_MS 再开始，且已切歌则直接放弃（不为旧曲目白下载整曲）；
+ * - 拉流是整曲下载，易受上游抖动 / `/stream` 限流影响而瞬时失败，
+ *   故失败后延时重试一次（成功结果有缓存，重试不会重复解码）。
+ */
+function startBeatAnalysis(track: AudioTrack): void {
+  beatClock.setTrack(track.id);
+  const run = (attempt: number, delayMs: number): void => {
+    window.setTimeout(() => {
+      if (usePlayerStore.getState().currentTrack?.id !== track.id) return; // 已切歌
+      analyzeTrackBeatMap(track.id, track.url, track.duration)
+        .then((map) => {
+          if (map) beatClock.setMap(track.id, map);
+          else if (attempt === 0) run(1, 2500);
+        })
+        .catch(() => {
+          if (attempt === 0) run(1, 2500);
+        });
+    }, delayMs);
+  };
+  run(0, BEAT_ANALYSIS_DELAY_MS);
 }
 
 /**
@@ -221,6 +267,8 @@ export async function playTrack(
     lyrics.loadLyrics(track.id);
     useHistoryStore.getState().addToHistory(fullTrack);
     applyCoverTint(track.cover);
+    // 离线节拍分析（异步，完成后歌词溢光切到精确节拍驱动）
+    startBeatAnalysis(fullTrack);
   };
 
   const loadAndFinish = async (): Promise<boolean> => {
@@ -236,16 +284,15 @@ export async function playTrack(
 
   if (await loadAndFinish()) return;
 
-  // 缓存的代理地址可能已过期（外站链接含时效令牌）→ 重新解析一次再试
+  // 首次加载失败：缓存的直链可能已过期（外站链接含时效令牌，服务端成功缓存也会过期）
+  // → 无论地址来自快照还是解析结果，都绕过缓存重新解析一次再试
   if (token !== playToken) return;
-  if (track.url && track.url === url) {
-    const resolved = await resolveTrackUrl(track.id);
-    if (token !== playToken) return;
-    if (resolved) {
-      fullTrack = { ...track, url: resolved.url };
-      writeBack();
-      if (await loadAndFinish()) return;
-    }
+  const retried = await resolveTrackUrl(track.id, true);
+  if (token !== playToken) return;
+  if (retried) {
+    fullTrack = { ...track, url: retried.url, resolvedQuality: retried.quality || '' };
+    writeBack();
+    if (await loadAndFinish()) return;
   }
   if (token === playToken) {
     showToast(`「${track.name}」播放失败`);
@@ -310,6 +357,8 @@ export async function restoreSession(): Promise<void> {
     const lyrics = useLyricsStore.getState();
     lyrics.loadLyrics(track.id);
     applyCoverTint(track.cover);
+    // 离线节拍分析（恢复现场同样驱动歌词溢光）
+    startBeatAnalysis({ ...track, url });
     // 恢复完成：把跳转后的真实进度立即落盘（否则下次刷新进度回到 0）
     flushSessionSnapshot();
   } catch {

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { usePlayerStore } from '../stores/usePlayerStore';
+import { audioEngine } from '../audio/AudioEngine';
 import { useLyricsStore } from '../stores/useLyricsStore';
 import { useUIStore } from '../stores/useUIStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
@@ -14,13 +15,11 @@ const smoothstep = (v: number) => v * v * (3 - 2 * v);
  */
 export default function StageLyrics() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const currentTime = usePlayerStore((s) => s.currentTime);
   const seek = usePlayerStore((s) => s.seek);
 
   const lyrics = useLyricsStore((s) => s.lyrics);
   const hasLyrics = useLyricsStore((s) => s.hasLyrics);
   const currentLineIndex = useLyricsStore((s) => s.currentLineIndex);
-  const setCurrentTime = useLyricsStore((s) => s.setCurrentTime);
 
   const lyricMode = useUIStore((s) => s.lyricMode);
   const lyricScale = useSettingsStore((s) => s.lyrics.scale);
@@ -33,7 +32,7 @@ export default function StageLyrics() {
     let disposed = false;
     // 平滑包络
     let smoothEnergy = 0, smoothMid = 0, smoothTreb = 0;
-    let beatEnv = 0, lastBeatOn = false, beatGlow = 0;
+    let beatGlow = 0;
     // 阳光能量自适应阈值状态
     let sunAvg = 0, sunPeak = 0.55, sunHold = 0, sunEnergy = 0;
     const env = (prev: number, next: number, attack: number, release: number) =>
@@ -42,7 +41,20 @@ export default function StageLyrics() {
     const loop = () => {
       if (disposed) return;
       raf = requestAnimationFrame(loop);
-      // 标签页隐藏 或 Home 页可见时跳过计算（歌词被 CSS 隐藏，无需驱动溢光）
+
+      // 歌词行推进：直读引擎实时进度（rAF 级精度）。
+      // 不能依赖 store.currentTime —— 它由 timeupdate 事件更新（约 250ms 一次），
+      // 行切换会滞后/量化 250ms；setCurrentTime 仅在行号变化时 setState，不会高频重渲染。
+      // 注意：即使 Home 页可见（歌词被主页遮挡）也要继续推进行号，
+      // 否则浏览 Home 期间行号会停住，切回舞台的瞬间会显示过期行。
+      //
+      // 时间偏移：音源母带（LX/酷我等第三方）与网易云歌词时间轴常不一致，
+      // 加上音频输出延迟（蓝牙/声卡缓冲）会表现为恒定超前/滞后，用设置里的
+      // 「歌词时间偏移」补偿：正值=歌词延后。此处直读 store，避免闭包读到过期值。
+      const lyricOffset = useSettingsStore.getState().lyrics.offset;
+      useLyricsStore.getState().setCurrentTime(audioEngine.getCurrentTime() - lyricOffset);
+
+      // 标签页隐藏 或 Home 页可见时跳过溢光计算（歌词不可见，无需驱动 CSS 变量）
       if (document.hidden || useUIStore.getState().homeVisible) return;
 
       const { analyserData, isPlaying } = usePlayerStore.getState();
@@ -50,18 +62,18 @@ export default function StageLyrics() {
         smoothEnergy = env(smoothEnergy, Math.min(0.72, analyserData?.energy ?? 0), 0.16, 0.055);
         smoothMid = env(smoothMid, Math.min(0.68, (analyserData?.mid ?? 0) * 0.64), 0.18, 0.06);
         smoothTreb = env(smoothTreb, Math.min(0.56, (analyserData?.treble ?? 0) * 0.54), 0.18, 0.055);
-        // 二值节拍 → 模拟包络
-        const beatOn = (analyserData?.beatPulse ?? 0) > 0.5;
-        if (beatOn && !lastBeatOn) beatEnv = Math.min(1, beatEnv + 0.62);
-        lastBeatOn = beatOn;
       } else {
         smoothEnergy *= 0.91; smoothMid *= 0.91; smoothTreb *= 0.91;
-        lastBeatOn = false;
       }
-      beatEnv *= 0.9;
 
-      // 节拍溢光（对应桌面版 beatGlow：快攻慢放）
-      const beatGlowRaw = beatEnv * 1.15;
+      // 整行呼吸 + 低频律动（对应桌面版 mesh.scale = 0.96 + breathe + bass*0.038 + beatPulse*0.014）
+      const nowSec = performance.now() / 1000;
+      const breathe = Math.sin(nowSec * 0.92) * 0.05 + Math.sin(nowSec * 0.41) * 0.028;
+      root.style.setProperty('--lyric-breath', (isPlaying ? breathe : 0).toFixed(4));
+      root.style.setProperty('--lyric-bass', Math.min(0.9, analyserData?.bass ?? 0).toFixed(3));
+
+      // 节拍溢光：beatPulseSmooth 来自离线节拍映射（桌面版 beatGlow 公式：beatPulse * 1.22，快攻慢放）
+      const beatGlowRaw = isPlaying ? (analyserData?.beatPulseSmooth ?? 0) * 1.22 : 0;
       beatGlow += (beatGlowRaw - beatGlow) * (beatGlowRaw > beatGlow ? 0.32 : 0.1);
 
       // 阳光溢光（对应桌面版 lyricSun*：持续能量 + 中高频抬升，副歌段落才点亮）
@@ -96,13 +108,20 @@ export default function StageLyrics() {
       cancelAnimationFrame(raf);
       root.style.removeProperty('--beat-glow');
       root.style.removeProperty('--lyric-sun');
+      root.style.removeProperty('--lyric-breath');
+      root.style.removeProperty('--lyric-bass');
     };
   }, []);
 
-  // 播放进度 → 当前行
+  // 歌词行号由上方 rAF 循环逐帧驱动（audioEngine.getCurrentTime），不再依赖
+  // 250ms 粒度的 store.currentTime；歌词晚到时立即按当前进度补一次同步（含时间偏移）
+  const trackId = currentTrack?.id;
   useEffect(() => {
-    if (currentTrack) setCurrentTime(currentTime);
-  }, [currentTime, currentTrack, setCurrentTime]);
+    if (trackId) {
+      const { offset } = useSettingsStore.getState().lyrics;
+      useLyricsStore.getState().setCurrentTime(audioEngine.getCurrentTime() - offset);
+    }
+  }, [trackId, lyrics]);
 
   // 可见行数随字号自适应：字号越大显示行数越少，避免超出容器被裁切
   const { above, below } = useMemo(() => {
@@ -196,6 +215,7 @@ function LyricsStage({
             key={singleLine.index}
             ref={singleLineRef}
             className="stage-lyric-line current"
+            data-text={singleLine.text}
             onClick={() => seek(Math.max(0, singleLine.time - 0.2))}
             title="点击跳到这句"
           >
@@ -226,6 +246,7 @@ function LyricsStage({
             <div
               key={line.index}
               className={`stage-lyric-line ${cls}`}
+              data-text={line.text}
               onClick={() => seek(Math.max(0, line.time - 0.2))}
               title="点击跳到这句"
             >
