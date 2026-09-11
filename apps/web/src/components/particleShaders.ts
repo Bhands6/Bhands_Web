@@ -64,12 +64,11 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define METEOR_WAVE_PERIOD 7.0
 
 // 螺旋星云（Preset 10）的盘半径基准。
-// ⚠️ 这个值必须与 ParticleStage.tsx 里 spiral 机位的 camera radius 一起调：
+// ⚠️ 这个值必须与 ParticleStage.tsx 里 spiral 机位的 camera radius（当前 8.8）配对：
 //    盘半径变了、相机没跟着动，星云就会缩在画面中央或者直接冲出取景框。
-//    FOV45 下横向可见半宽 = R·tan(22.5°)·宽高比；16:9 时 ≈ R·0.5969。
-//    当前 R=8.8 → 半宽 ≈ 5.25，盘半径 6.4 会略微出血到画面边缘之外
-//    （这是刻意的：让星云有"铺满画面"的观感，边缘用 vAlpha 的淡出窗口收住）。
-#define SPIRAL_RMAX 6.4
+// 2026-09-11 用户反馈「面积有点小，再外围再扩大一点」：6.4 → 7.4（约 +16%），相机保持 8.8 不动 ——
+//    星云在屏上整体放大一圈，水平方向有意保留少量出血（铺满观感），外缘仍由 vAlpha 的淡出窗口收住。
+#define SPIRAL_RMAX 7.4
 
 // 螺旋星云（v8）的形态常量 —— 对齐新参考实现（三段配色 galaxy generator）：
 // 2 条主旋臂 + 线性缠绕 + pow 长尾臂内弥散 + 差速自转 + 高斯星云厚度。
@@ -625,8 +624,12 @@ void main(){
     float wave = floor(hash11(aRand * 137.0) * 4.0);
     float lph = clamp((uBurstAge - wave * 0.075) / 0.80, 0.0, 1.0);
 
-    // 每颗粒子的稳定轨道半径与轨道角度
-    float orbitR = (0.32 + hash11(aRand * 71.0) * 0.85) * 4.4;
+    // 每颗粒子的稳定轨道半径与轨道角度。
+    // 内侧下限 0.14、整体系数 4.0（2026-09-11 用户反馈「中间圆空白太多 + 整体缩小一些」）：
+    // 稳态半径范围 0.56~3.96 —— 旧值 0.32/4.4 时是 1.41~5.15，中心空腔直径 1.41×2 在屏上约 386px 宽，
+    // 且外缘 5.15 远超取景半宽约 3.94（整片铺满全屏）。收拢后中心只留一个小呼吸核，云整体回到取景框内。
+    // ⚠️ 下限不能写到 0：内圈会挤成一颗糊住的中心亮斑。
+    float orbitR = (0.14 + hash11(aRand * 71.0) * 0.85) * 4.0;
     float rr = (0.10 + 0.90 * pow(lph, 0.62)) * orbitR;
 
     // 缓慢自转：**恒定角速度**，不接任何音频量。
@@ -646,8 +649,20 @@ void main(){
     // 所以这里用 dz*dz 代替（公式等价且恒定有定义）。
     float dz = (lph - 0.90) / 0.18;
     float shell = exp(-dz * dz) * (1.0 - smoothstep(0.90, 1.0, lph));
+    // 颜色：封面为主（2026-09-11 用户反馈「颜色更好看一些，或者取至歌曲图片的颜色」）。
+    // coverColor 本就是逐粒子从封面纹理采的色，旧做法把它稀释到 36%、被硬编码青/粉盖住 → 发灰发青。
+    // 暗沉封面会把云拖脏 → 先提饱和、再抬黑位，然后派生同族双色调（亮调/暖金调）按粒子随机取，
+    // 核心偏亮、外缘偏深（radT）给云径向层次；无封面时经 uHasCover 回落原内置双色。
+    float lumC = dot(coverColor, vec3(0.299, 0.587, 0.114));
+    vec3 coverC = max(mix(vec3(lumC), coverColor, 1.45), vec3(0.0));
+    coverC = coverC * 0.86 + 0.14;
+    vec3 toneA = mix(coverC, vec3(1.0), 0.22);
+    vec3 toneB = mix(coverC, vec3(1.0, 0.72, 0.38), 0.38);
+    vec3 coverTone = mix(toneA, toneB, hash11(aRand * 53.0));
+    float radT = clamp(rr / 4.2, 0.0, 1.0);
+    coverTone = mix(mix(coverTone, vec3(1.0), 0.22), coverTone * 0.92, radT);
     vec3 burstCol = mix(vec3(0.20, 0.96, 0.86), vec3(1.0, 0.60, 0.78), hash11(aRand * 53.0) * 0.5);
-    vColor = mix(burstCol, coverColor, 0.36) * (0.80 + shell * 0.75);
+    vColor = mix(burstCol, coverTone, uHasCover) * (0.80 + shell * 0.75);
 
     // 只在起爆瞬间做一次快速淡入（避免粒子全挤在中心糊成亮斑）；
     // 之后**不再淡出** —— 这正是「迸发后不要消失」。

@@ -315,6 +315,50 @@ describe('极光流星', () => {
   });
 });
 
+describe('迸发预设 8：轨道几何（2026-09-11 收紧中心空腔 + 整体缩小）', () => {
+  it('orbitR 下限要小（中心不能留大空腔）但不能到 0（防中心糊亮斑），系数不得撑出取景框', () => {
+    const code = VERTEX_SHADER.replace(/\/\/.*$/gm, '');
+    const m = code.match(
+      /float orbitR = \(([\d.]+) \+ hash11\(aRand \* 71\.0\) \* [\d.]+\) \* ([\d.]+);/
+    );
+    if (!m) throw new Error('未找到迸发 orbitR 公式（可能被重构，需同步更新本断言）');
+    const floor = Number(m[1]); // 中心空腔半径 = floor × 系数
+    const scale = Number(m[2]);
+    // 相机 burst radius=6.6：取景半宽约 3.94 / 半高约 2.73（y 压扁 0.62 + 浮动 0.12）
+    expect(floor, '空腔下限过大会在中心留大圆空白（用户反馈「中间空白太多」）').toBeLessThanOrEqual(0.20);
+    expect(floor, '下限到 0 内圈会挤成一颗中心亮斑').toBeGreaterThanOrEqual(0.05);
+    expect(scale, '系数过大会让整片云超出取景框、铺满全屏').toBeLessThanOrEqual(4.2);
+    expect(scale, '系数过小整片会缩成一团').toBeGreaterThanOrEqual(3.4);
+  });
+});
+
+describe('迸发预设 8：封面取色（2026-09-11「颜色更好看 / 取至歌曲图片」）', () => {
+  const burstCode = (() => {
+    const code = VERTEX_SHADER.replace(/\/\/.*$/gm, '');
+    const from = code.indexOf('uPreset < 8.5');
+    const to = code.indexOf('uPreset < 9.5');
+    if (from < 0 || to < 0) throw new Error('未找到迸发分支边界');
+    return code.slice(from, to);
+  })();
+
+  it('必须以 coverColor 为主色（提饱和 + 抬黑位），旧的 36% 稀释混色必须消失', () => {
+    expect(burstCode).toMatch(/vec3 coverC = max\(mix\(vec3\(lumC\), coverColor, 1\.\d+\), vec3\(0\.0\)\)/);
+    expect(burstCode).toMatch(/coverC \* [\d.]+ \+ [\d.]+/);
+    // 旧根因：mix(burstCol, coverColor, 0.36) 让硬编码青/粉盖过封面色，整片发灰发青
+    expect(burstCode).not.toMatch(/mix\(burstCol, coverColor, 0\.36\)/);
+  });
+
+  it('主色必须经 uHasCover 门控：无封面回落内置青/粉双色', () => {
+    expect(burstCode).toMatch(/mix\(burstCol, coverTone, uHasCover\)/);
+  });
+
+  it('保留径向层次：核亮缘深，且 rr 参与颜色前必须 clamp（负底数防护同款约束）', () => {
+    expect(burstCode).toMatch(/float radT = clamp\(rr \/ [\d.]+, 0\.0, 1\.0\)/);
+    // 外缘必须有压深项
+    expect(burstCode).toMatch(/coverTone \* 0\.\d+/);
+  });
+});
+
 describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
   it('两个预设都注册了 shader 分支（9 用 else if 区间、10 用兜底 else）', () => {
     // 9 必须写成区间判定，才能给 10 留出 > 9.5 的空间；10 是最后一个分支，用 else 兜底
