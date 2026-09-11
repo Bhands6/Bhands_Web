@@ -1,9 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import NcmApiDefault from 'NeteaseCloudMusicApi';
 import { getNeteaseCookie, setNeteaseCookie, clearNeteaseCookie, ensureSid } from '../neteaseSession';
-
-// NCM 自带类型过于严格（body 字段均为 unknown），路由层按宽松类型调用
-const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
+import { NcmApi } from '../ncm';
 
 interface UserInfo {
   userId: string;

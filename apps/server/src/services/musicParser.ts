@@ -96,8 +96,8 @@ async function tryLxMusic(p: ParseParams): Promise<ParseResult | null> {
 // 策略：UnblockNeteaseMusic（从 music.ts 迁移）
 // ============================================================
 import unblockMatch from '@unblockneteasemusic/server';
-import NcmApiDefault from 'NeteaseCloudMusicApi';
-const NcmApi = NcmApiDefault as unknown as Record<string, (q?: any) => Promise<any>>;
+import { NcmApi, withTimeout } from '../ncm';
+import crypto from 'node:crypto';
 
 // 实测：migu / pyncmd 全部返回空（0/20），保留只会白白增加失败延迟，故只留 kugou / kuwo；
 // 且 kugou 的正确率（78%）明显高于 kuwo（21%），故 kugou 在前。
@@ -122,7 +122,9 @@ async function tryUnblock(p: ParseParams, timeout = 5000): Promise<ParseResult |
     } catch { /* ignore */ }
     return null;
   })();
-  if (timeout > 0) return Promise.race([doMatch, new Promise<null>((r) => setTimeout(() => r(null), timeout))]);
+  // withTimeout：胜出后清理计时器（旧写法 race 胜出后 setTimeout 残留）；
+  // doMatch 内部已有 try/catch 不会 reject，此处 .catch(() => null) 把超时降级为「未命中」
+  if (timeout > 0) return withTimeout(doMatch, timeout, 'unblock').catch(() => null);
   return doMatch;
 }
 
@@ -216,8 +218,13 @@ export async function resolveSongUrl(
 ): Promise<ParseResult | null> {
   const { vip, cookie, bypassCache, ...p } = params;
 
-  // 成功缓存：音质档位参与 key（不同档位请求不得互相拿到对方的结果）
-  const cacheKey = `${p.id}_${p.quality || 'exhigh'}_${vip ? 'v' : 'n'}`;
+  // 成功缓存：音质档位参与 key（不同档位请求不得互相拿到对方的结果）；
+  // ⚠️ cookie 指纹也必须参与 key —— 否则 A 账号解析出的 VIP 付费直链会被
+  //    任意匿名/他账号请求在 10 分钟内复用（vip 参数是客户端可控的，兜不住这事）
+  const cookieTag = cookie
+    ? crypto.createHash('md5').update(cookie).digest('hex').slice(0, 8)
+    : 'anon';
+  const cacheKey = `${p.id}_${p.quality || 'exhigh'}_${vip ? 'v' : 'n'}_${cookieTag}`;
   if (!bypassCache) {
     const cached = successCache.get(cacheKey);
     if (cached && Date.now() - cached.time < SUCCESS_TTL) return cached.data;

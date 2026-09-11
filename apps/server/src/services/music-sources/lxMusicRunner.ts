@@ -34,6 +34,9 @@ function parseScriptInfo(script: string): Record<string, string> {
   return info;
 }
 
+/** 沙盒 HTTP 响应体上限：脚本（互联网上的第三方 LX 源）无界累积可 OOM 进程 */
+const MAX_SANDBOX_BODY_BYTES = 2 * 1024 * 1024;
+
 function sandboxHttpRequest(url: string, options: any = {}): Promise<{ status: number; headers: any; body: string }> {
   return new Promise((resolve, reject) => {
     const isHttps = url.startsWith('https');
@@ -49,8 +52,17 @@ function sandboxHttpRequest(url: string, options: any = {}): Promise<{ status: n
     };
     const req = client.request(reqOpts, (res) => {
       let body = '';
+      let bytes = 0;
       res.setEncoding('utf8');
-      res.on('data', (chunk: string) => { body += chunk; });
+      res.on('data', (chunk: string) => {
+        bytes += Buffer.byteLength(chunk);
+        if (bytes > MAX_SANDBOX_BODY_BYTES) {
+          req.destroy();
+          reject(new Error('Response too large'));
+          return;
+        }
+        body += chunk;
+      });
       res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers, body }));
     });
     req.on('error', reject);
@@ -150,6 +162,8 @@ class LxMusicRunner {
   private _lxHandlers: Record<string, Function[]> = {};
   private _initialized = false;
   private _scriptName = '';
+  /** 本 runner 的沙盒定时器登记表（init 时被 bridge 闭包引用） */
+  private _timers: Set<NodeJS.Timeout> = new Set();
 
   async init(scriptContent: string, scriptName?: string): Promise<boolean> {
     try {
@@ -159,13 +173,34 @@ class LxMusicRunner {
       const lxEventHandlers: Record<string, Function[]> = {};
       this._lxHandlers = lxEventHandlers;
 
+      // 沙盒定时器登记表：被删除/替换的脚本，其 setInterval 若不回收，
+      // 回调（持有整个沙盒 context）会永久驻留并持续执行 —— CPU/内存随脚本增删累积
+      const sandboxTimers = this._timers;
+      const trackedTimeout = (fn: any, ms?: number, ...args: any[]): NodeJS.Timeout => {
+        const t = setTimeout((...a: any[]) => { sandboxTimers.delete(t); fn(...a); }, ms, ...args);
+        sandboxTimers.add(t);
+        return t;
+      };
+      const trackedInterval = (fn: any, ms?: number, ...args: any[]): NodeJS.Timeout => {
+        const t = setInterval((...a: any[]) => fn(...a), ms, ...args);
+        sandboxTimers.add(t);
+        return t;
+      };
+      // Node 里 clearTimeout 对 interval 句柄同样有效（同一底层实现）
+      const clearTracked = (t: any): void => {
+        if (t == null) return;
+        sandboxTimers.delete(t);
+        clearTimeout(t);
+      };
+
       // 桥接对象：脚本触达宿主能力的唯一入口（定时器/网络/摘要）。
       // 注意 vm 不是安全边界，脚本可信性由路由层的 ADMIN_TOKEN 鉴权保证；
       // 这里不再向沙盒注入宿主 realm 的 Object/Error/Buffer 等构造器，
       // 堵住 e.constructor.constructor('return process')() 这类一行逃逸。
       const bridge = {
         handlers: lxEventHandlers,
-        setTimeout, clearTimeout, setInterval, clearInterval,
+        setTimeout: trackedTimeout, clearTimeout: clearTracked,
+        setInterval: trackedInterval, clearInterval: clearTracked,
         httpRequest: sandboxHttpRequest,
         scriptInfo: { ...parseScriptInfo(scriptContent), rawScript: scriptContent },
         request: (url: string, opts: any, cb: Function) => {
@@ -200,8 +235,17 @@ class LxMusicRunner {
             };
             const req = client.request(reqOpts, (res: any) => {
               let data = '';
+              let bytes = 0;
               res.setEncoding('utf8');
-              res.on('data', (chunk: string) => { data += chunk; });
+              res.on('data', (chunk: string) => {
+                bytes += Buffer.byteLength(chunk);
+                if (bytes > MAX_SANDBOX_BODY_BYTES) {
+                  req.destroy();
+                  cb(new Error('Response too large'));
+                  return;
+                }
+                data += chunk;
+              });
               res.on('end', () => {
                 let parsed: any = data;
                 try { parsed = JSON.parse(data); } catch {}
@@ -290,6 +334,18 @@ class LxMusicRunner {
   isInitialized(): boolean { return this._initialized; }
   getAvailableSourceKeys(): string[] { return Object.keys(this._sources); }
 
+  /** 回收脚本资源：清除沙盒里登记的全部定时器（不回收的被删脚本 interval 会永久驻留） */
+  dispose(): void {
+    for (const t of this._timers) {
+      clearTimeout(t);
+      clearInterval(t);
+    }
+    this._timers.clear();
+    this._initialized = false;
+    this._sources = {};
+    this._lxHandlers = {};
+  }
+
   async getMusicUrl(sourceKey: string, songInfo: any, quality: string): Promise<string | null> {
     // 事件式脚本（新版 LX Music 脚本）
     if (this._sources._lxEvent && this._lxApi) {
@@ -313,7 +369,13 @@ class LxMusicRunner {
     try {
       const handler = source.getMusicUrl || source.get_url || source.getUrl;
       if (typeof handler !== 'function') return null;
-      const result = await handler(songInfo, quality);
+      // 旧版 handler 此前完全无超时：脚本返回 never-resolve 的 Promise 会把
+      // tryLxMusic → resolveSongUrl → 路由整条链永久挂死（事件式路径本就有 12s）
+      let timer: NodeJS.Timeout | undefined;
+      const result: any = await Promise.race([
+        Promise.resolve(handler(songInfo, quality)),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 12_000); })
+      ]).finally(() => clearTimeout(timer));
       if (result && typeof result === 'string' && result.startsWith('http')) return result;
       if (result?.url && typeof result.url === 'string') return result.url;
       return null;
@@ -343,12 +405,17 @@ export async function loadPersistedScripts(): Promise<number> {
     const data = JSON.parse(fs.readFileSync(SCRIPTS_FILE, 'utf8'));
     let count = 0;
     for (const s of (data.scripts || [])) {
+      // 字段校验：损坏条目跳过而不是靠 init 内部 catch 兜底（损坏时至少这里可日志排查）
+      if (!s || typeof s.id !== 'string' || typeof s.script !== 'string') continue;
       if (_runners[s.id]) continue;
       const runner = await initRunner(s.id, s.script, s.name, s.id === data.activeId);
       if (runner) count++;
     }
     return count;
-  } catch { return 0; }
+  } catch (err: any) {
+    console.warn('[LxMusic] 加载持久化脚本失败:', err?.message || err);
+    return 0;
+  }
 }
 
 // ============================================================
@@ -381,6 +448,8 @@ export function setActiveRunner(scriptId: string): boolean {
 }
 
 export function removeRunner(scriptId: string): void {
+  // 先回收定时器再删除：被删脚本的沙盒 interval 不清除会永久驻留（CPU/内存泄漏）
+  _runners[scriptId]?.dispose();
   delete _runners[scriptId];
   delete _scriptsStore[scriptId];
   if (_activeRunnerId === scriptId) {

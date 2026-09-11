@@ -1,9 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import NcmApiDefault from 'NeteaseCloudMusicApi';
 import { getNeteaseCookie } from '../neteaseSession';
-
-// NCM 自带类型过于严格，路由层按宽松类型调用（与 music.ts 保持一致）
-const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
+import { NcmApi } from '../ncm';
 
 const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 const OPEN_METEO_GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';

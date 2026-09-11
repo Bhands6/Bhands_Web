@@ -20,6 +20,9 @@
 const HEAD_BYTES = 32 * 1024;
 const TAIL_BYTES = 1024 * 1024;
 const PROBE_TIMEOUT_MS = 6000;
+/** 单次探测响应体上限：部分 CDN 无视 Range 返回 200 + 整首曲子（FLAC 上百 MB），
+ *  无条件 arrayBuffer() 会把它全读进内存，被 /song/:id/url 的候选遍历放大成内存 DoS */
+const MAX_PROBE_BYTES = 2 * 1024 * 1024;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 export type AudioKind = 'mp4' | 'mp3' | 'flac' | 'ogg' | 'unknown';
@@ -45,11 +48,20 @@ async function fetchRange(url: string, range: string): Promise<RangeData | null>
       redirect: 'follow',
       headers: { Range: range, 'User-Agent': UA }
     });
-    if (!res.ok && res.status !== 206) {
+    // 只接受 206 分段响应：200 = CDN 无视了 Range（body 是整首曲子），按取不到数据处理
+    //（probeAudio 对 unreachable fail-open，不会误杀音源）
+    if (res.status !== 206) {
+      res.body?.cancel().catch(() => {});
+      return null;
+    }
+    // 声明体积超限直接放弃；content-length 缺失/撒谎由读入后的实际长度兜底
+    const declared = Number(res.headers.get('content-length') || 0);
+    if (Number.isFinite(declared) && declared > MAX_PROBE_BYTES) {
       res.body?.cancel().catch(() => {});
       return null;
     }
     const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_PROBE_BYTES) return null;
     // content-range: bytes 0-32767/12345678 → 总大小
     const cr = res.headers.get('content-range');
     const m = cr && cr.match(/\/(\d+)\s*$/);

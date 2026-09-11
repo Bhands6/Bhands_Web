@@ -1,14 +1,15 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
-import NcmApiDefault from 'NeteaseCloudMusicApi';
 import { resolveSongUrl } from '../services/musicParser';
 import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners, canAddScript } from '../services/music-sources/lxMusicRunner';
 import { getNeteaseCookie } from '../neteaseSession';
 import { assertAdmin } from '../adminAuth';
 import { limitedByIp } from '../rateLimit';
+import { NcmApi } from '../ncm';
 
-// NCM 自带类型过于严格（body 字段均为 unknown），路由层按宽松类型调用
-const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
+/** 音质档位白名单（与前端 useUIStore 的 QUALITY_VALUES 一致）：
+ *  任意字符串会灌进服务端成功缓存 key（cleanCache 只清过期不清容量），未知档位一律按默认档处理 */
+const QUALITY_TIERS = new Set(['standard', 'exhigh', 'lossless', 'hires', 'jymaster']);
 
 /** 前端 SongItem 结构 */
 interface SongItem {
@@ -189,6 +190,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     const { quality = 'exhigh', vip, fresh } = request.query as { quality?: string; vip?: string; fresh?: string };
     const cookie = getNeteaseCookie(request);
+    const tier = QUALITY_TIERS.has(quality) ? quality : 'exhigh';
 
     if (!limitedByIp(request, 'songurl', 60, 60_000)) {
       return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
@@ -209,7 +211,7 @@ export async function musicRoutes(fastify: FastifyInstance) {
       } catch { /* 元数据拉取失败不阻塞解析，第三方按缺省信息降级 */ }
 
       const result = await resolveSongUrl({
-        id, name, artists, detail, quality,
+        id, name, artists, detail, quality: tier,
         // 时长（ms）供音源脚本换算 interval，缺失会导致匹配到错版本
         durationMs: detail?.dt || 0,
         vip: vip === 'true' || vip === '1',
@@ -323,7 +325,11 @@ export async function musicRoutes(fastify: FastifyInstance) {
   });
 
   // 推荐歌曲：登录用每日推荐，未登录退化为新歌速递
-  fastify.get('/recommend', async (request: FastifyRequest, _reply: FastifyReply) => {
+  fastify.get('/recommend', async (request: FastifyRequest, reply: FastifyReply) => {
+    // 之前是全文件唯一没有限流的端点，且内部串两个 NCM 调用 —— 可被无限刷
+    if (!limitedByIp(request, 'recommend', 30, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
     const cookie = getNeteaseCookie(request);
 
     if (cookie) {
