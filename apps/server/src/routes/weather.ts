@@ -8,6 +8,9 @@ const NcmApi = NcmApiDefault as unknown as Record<string, (query?: any) => Promi
 const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 const OPEN_METEO_GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 
+/** 境外接口整体超时（undici 默认连接超时 10s 太久，天气请求不应挂着 10 秒） */
+const WEATHER_FETCH_TIMEOUT_MS = 5000;
+
 const WEATHER_DEFAULT_LOCATION = {
   name: '上海',
   country: 'China',
@@ -215,8 +218,12 @@ export function buildWeatherMood(weather: Partial<WeatherInfo>, date = new Date(
   return mood;
 }
 
-/** 城市名 → 经纬度（Open-Meteo 地理编码，失败回落默认城市） */
-async function resolveOpenMeteoLocation(query: unknown): Promise<WeatherInfo['location']> {
+/**
+ * 城市名 → 经纬度（Open-Meteo 地理编码）。
+ * ⚠️ 网络失败（连接超时/被墙）与「无结果」一样回落默认城市 —— 地理编码挂了不该让整个天气接口 500。
+ * 导出仅为单测。
+ */
+export async function resolveOpenMeteoLocation(query: unknown): Promise<WeatherInfo['location']> {
   const raw = String(query || '').trim();
   if (!raw) return { ...WEATHER_DEFAULT_LOCATION };
 
@@ -226,19 +233,24 @@ async function resolveOpenMeteoLocation(query: unknown): Promise<WeatherInfo['lo
   u.searchParams.set('language', 'zh');
   u.searchParams.set('format', 'json');
 
-  const body: any = await fetch(u.toString()).then((r) => r.json());
-  const first = body?.results?.[0];
-  if (!first) {
+  try {
+    const body: any = await fetch(u.toString(), { signal: AbortSignal.timeout(WEATHER_FETCH_TIMEOUT_MS) }).then((r) => r.json());
+    const first = body?.results?.[0];
+    if (!first) {
+      return { ...WEATHER_DEFAULT_LOCATION, fallback: true };
+    }
+    return {
+      name: first.name || raw,
+      country: first.country || '',
+      admin1: first.admin1 || '',
+      latitude: first.latitude,
+      longitude: first.longitude,
+      timezone: first.timezone || 'auto'
+    };
+  } catch (error) {
+    console.warn('[weather] 地理编码不可达，回落默认城市:', (error as Error)?.message ?? error);
     return { ...WEATHER_DEFAULT_LOCATION, fallback: true };
   }
-  return {
-    name: first.name || raw,
-    country: first.country || '',
-    admin1: first.admin1 || '',
-    latitude: first.latitude,
-    longitude: first.longitude,
-    timezone: first.timezone || 'auto'
-  };
 }
 
 /** 天气结果缓存：Open-Meteo 免费接口不宜被打爆，当前天气 10 分钟内直接复用 */
@@ -288,7 +300,17 @@ async function fetchOpenMeteoWeather(params: {
   u.searchParams.set('forecast_days', '1');
   u.searchParams.set('timezone', location.timezone || 'auto');
 
-  const body: any = await fetch(u.toString()).then((r) => r.json());
+  let body: any;
+  try {
+    body = await fetch(u.toString(), { signal: AbortSignal.timeout(WEATHER_FETCH_TIMEOUT_MS) }).then((r) => r.json());
+  } catch (error) {
+    // 上游不可达（网络抖动/境外接口被墙）→ 有旧缓存（即使已过期）就先顶着，别直接 500
+    if (cached) {
+      console.warn('[weather] Open-Meteo 不可达，返回过期缓存:', (error as Error)?.message ?? error);
+      return cached.data;
+    }
+    throw error;
+  }
   const cur = body?.current || {};
 
   const weather: WeatherInfo = {
