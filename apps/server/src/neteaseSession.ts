@@ -8,10 +8,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ensureDataDir } from './dataDir';
+import { sessionPersistEnabled } from './envFlags';
 
 const SID_NAME = 'bhands_sid';
 const SESSION_TTL_MS = 7 * 24 * 3600 * 1000; // 7 天未活动过期
-const COOKIE_FILE = path.join(ensureDataDir(), 'ncm-cookies.json');
 
 interface SessionEntry {
   cookie: string;
@@ -19,23 +19,36 @@ interface SessionEntry {
 }
 
 const sessions = new Map<string, SessionEntry>();
-// TODO: 测试用功能，正式部署时移除 cookie 持久化（persistSessions / loadPersistedSessions / COOKIE_FILE）
-/** 存盘：保存所有会话到文件 */
+
+/** cookie 存档路径（惰性求值：持久化关闭时不应在启动期创建 data 目录） */
+function cookieFile(): string {
+  return path.join(ensureDataDir(), 'ncm-cookies.json');
+}
+
+/**
+ * cookie 持久化（原「测试用功能，正式部署时移除」的 TODO 已改为环境开关）：
+ * 仅当 .env 设 SESSION_PERSIST=on 时才落盘/读档 —— 部署默认关闭，
+ * 磁盘上不出现任何登录凭据；内存会话行为不变（进程重启后需重新扫码）。
+ */
 function persistSessions(): void {
+  if (!sessionPersistEnabled()) return;
   try {
-    const dir = path.dirname(COOKIE_FILE);
+    const file = cookieFile();
+    const dir = path.dirname(file);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const data: Record<string, SessionEntry> = {};
     for (const [sid, entry] of sessions) data[sid] = entry;
-    fs.writeFileSync(COOKIE_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
   } catch { /* 非致命 */ }
 }
 
-/** 启动时从文件恢复会话 */
+/** 启动时从文件恢复会话（SESSION_PERSIST=on 才生效，否则恒为 0） */
 export function loadPersistedSessions(): number {
+  if (!sessionPersistEnabled()) return 0;
   try {
-    if (!fs.existsSync(COOKIE_FILE)) return 0;
-    const data = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8')) as Record<string, SessionEntry>;
+    const file = cookieFile();
+    if (!fs.existsSync(file)) return 0;
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, SessionEntry>;
     let count = 0;
     for (const [sid, entry] of Object.entries(data)) {
       if (entry.cookie && Date.now() - entry.updatedAt < SESSION_TTL_MS) {

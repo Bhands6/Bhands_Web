@@ -16,11 +16,14 @@ import { loadPersistedScripts } from './services/music-sources/lxMusicRunner';
 import { loadPersistedSessions } from './neteaseSession';
 import { userRoutes } from './routes/user';
 import { weatherRoutes } from './routes/weather';
+import { trustProxyEnabled, sessionPersistEnabled } from './envFlags';
 
 const server = Fastify({
   logger: true,
-  // Caddy 反代场景下信任 X-Forwarded-*，使 request.protocol/ip 正确（cookie Secure、限流依赖）
-  trustProxy: true
+  // 仅在 .env 设 TRUST_PROXY=1（Caddy/nginx 反代后部署）时信任 X-Forwarded-*，
+  // 使 request.protocol（cookie Secure）与 request.ip（限流）取到真实客户端值。
+  // 直连部署保持默认 false：trustProxy=true 会信任可伪造的 XFF，按 IP 限流整体失效。
+  trustProxy: trustProxyEnabled()
 });
 
 /** 解析前端构建产物目录。
@@ -103,10 +106,13 @@ async function main() {
     // 启动时加载已持久化的 LX Music 脚本
     loadPersistedScripts().then((n) => { if (n) console.log(`[LxMusic] 已加载 ${n} 个持久化脚本`); }).catch(() => {});
 
-    // TODO: 测试用功能，正式部署时移除
-    // 启动时恢复持久化的网易云登录会话
-    const restoredSessions = loadPersistedSessions();
-    if (restoredSessions) console.log(`[Session] 已恢复 ${restoredSessions} 个登录会话`);
+    // 登录会话持久化：仅 SESSION_PERSIST=on 时启用（部署默认关闭，磁盘不留登录凭据）
+    if (sessionPersistEnabled()) {
+      const restoredSessions = loadPersistedSessions();
+      console.log(`[Session] 会话持久化已开启，从存档恢复 ${restoredSessions} 个登录会话`);
+    } else {
+      console.log('[Session] 会话持久化关闭（部署默认）：登录态仅存内存，重启后需重新扫码');
+    }
   } catch (err) {
     server.log.error(err);
     process.exit(1);
