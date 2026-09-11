@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { audioEngine } from '../audio/AudioEngine';
 import type { AudioTrack, AudioState, AudioAnalyserData } from '../audio/AudioEngine';
+import { releaseBlobUrlsExcept } from '../utils/blobUrls';
+import { useHistoryStore } from './useHistoryStore';
+import { useFavoritesStore } from './useFavoritesStore';
 
 interface PlayerState {
   // 播放状态
@@ -222,6 +225,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
     audioEngine.pause();
     sessionStorage.removeItem(SESSION_KEY);
+    // 队列已清：本地导入的 blob URL 按「历史/收藏仍引用」回收孤儿（正在播的引用已随 set 清空）
+    const keep = new Set<string>();
+    for (const t of useHistoryStore.getState().history) keep.add(t.id);
+    for (const t of useFavoritesStore.getState().favorites) keep.add(t.id);
+    releaseBlobUrlsExcept(keep);
   }
 }));
 

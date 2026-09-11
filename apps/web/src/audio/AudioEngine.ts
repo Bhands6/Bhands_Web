@@ -76,6 +76,9 @@ export class AudioEngine {
   private onStateChange: ((state: AudioState) => void) | null = null;
   private onAnalyserData: ((data: AudioAnalyserData) => void) | null = null;
   private onTrackEnd: (() => void) | null = null;
+  /** 播放中断回调：歌曲中途 error / 后台挂死看门狗触发（playService 据此自动恢复） */
+  private onTrackError: ((err: Error) => void) | null = null;
+  private stallWatchdog: number | null = null;
 
   private animationFrame: number | null = null;
 
@@ -156,7 +159,39 @@ export class AudioEngine {
         this.state.loading = false;
         this.state.error = '音频加载失败，可能是版权或网络限制';
         this.notifyStateChange();
+        // ⚠️ 歌曲中途流断掉（/api/music/stream 上游 ECONNRESET 等）只会走到这里 ——
+        // 此前没有任何重试，后台播放就此永久停止。交给 playService 做限频自动恢复。
+        this.onTrackError?.(new Error(this.state.error));
       });
+
+      // 后台挂死看门狗：流「黑洞式卡死」时无 error、无 ended，currentTime 冻结 ——
+      // 没有任何事件可依赖，只能主动巡检。后台 tab 的 setInterval 最低被压到 1s，
+      // 且 Chrome 对有声页面豁免 intensive throttling（卡死无声的最坏情况也只是恢复变慢，不会永不恢复）。
+      let watchdogLastTime = -1;
+      let watchdogStalled = 0;
+      this.stallWatchdog = window.setInterval(() => {
+        const el = this.audioElement;
+        if (!el) return;
+        if (!this.state.isPlaying || el.paused || el.ended || el.seeking) {
+          watchdogLastTime = el.currentTime;
+          watchdogStalled = 0;
+          return;
+        }
+        // readyState < 3（无未来缓冲数据）且进度冻结，连续两次检查（≥8s）→ 判定挂死
+        if (el.currentTime === watchdogLastTime && el.readyState < 3) {
+          watchdogStalled += 1;
+          if (watchdogStalled >= 2) {
+            watchdogStalled = 0;
+            this.state.error = '播放卡住，正在自动恢复…';
+            this.notifyStateChange();
+            this.onTrackError?.(new Error('playback stalled'));
+            return;
+          }
+        } else {
+          watchdogStalled = 0;
+        }
+        watchdogLastTime = el.currentTime;
+      }, 4000);
 
       return true;
     } catch (error) {
@@ -301,6 +336,10 @@ export class AudioEngine {
     this.onTrackEnd = callback;
   }
 
+  public setOnTrackError(callback: (err: Error) => void): void {
+    this.onTrackError = callback;
+  }
+
   private startAnalyserLoop(): void {
     if (this.animationFrame) return;
     const loop = () => {
@@ -399,10 +438,20 @@ export class AudioEngine {
 
   private notifyStateChange(): void {
     this.onStateChange?.({ ...this.state });
+    // 同步 OS 媒体面板的播放状态（后台/锁屏可见），不支持 MediaSession 的环境静默跳过
+    try {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = this.state.isPlaying ? 'playing' : 'paused';
+      }
+    } catch { /* 忽略 */ }
   }
 
   public destroy(): void {
     this.stopAnalyserLoop();
+    if (this.stallWatchdog != null) {
+      window.clearInterval(this.stallWatchdog);
+      this.stallWatchdog = null;
+    }
     if (this.audioElement) {
       this.audioElement.pause();
       this.audioElement.src = '';

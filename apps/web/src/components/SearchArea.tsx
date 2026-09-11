@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../stores/useUIStore';
 import { useSearchStore } from '../stores/useSearchStore';
 import { playSearchResult, playTrack } from '../services/playService';
+import { registerBlobUrl } from '../utils/blobUrls';
 import type { AudioTrack } from '../audio/AudioEngine';
 
 /** 顶部搜索区：搜索框 + 模式切换 + 结果列表 + 本地音乐导入（对应桌面版 #search-area）
@@ -90,6 +91,8 @@ export default function SearchArea() {
       cover: '',
       source: 'local'
     }));
+    // 登记 blob URL：换歌单/清队列时按引用回收（utils/blobUrls.ts），不再永久持有文件字节
+    for (const t of tracks) registerBlobUrl(t.id, t.url);
     await playTrack(tracks[0], tracks, 0);
   };
 

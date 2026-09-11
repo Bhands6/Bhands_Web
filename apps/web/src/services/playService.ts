@@ -1,5 +1,5 @@
 import { musicApi, SongItem } from '../api/music';
-import { AudioTrack } from '../audio/AudioEngine';
+import { audioEngine, AudioTrack } from '../audio/AudioEngine';
 import { beatClock } from '../audio/beatClock';
 import { analyzeTrackBeatMap } from '../audio/beatAnalyzer';
 import { usePlayerStore, readSessionSnapshot, flushSessionSnapshot } from '../stores/usePlayerStore';
@@ -8,6 +8,8 @@ import { useLyricsStore } from '../stores/useLyricsStore';
 import { useHistoryStore } from '../stores/useHistoryStore';
 import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
+import { useFavoritesStore } from '../stores/useFavoritesStore';
+import { releaseBlobUrlsExcept } from '../utils/blobUrls';
 
 /** SongItem(搜索结果) → AudioTrack(播放器) */
 export function songItemToTrack(song: SongItem): AudioTrack {
@@ -207,7 +209,33 @@ function isDirectPlayableUrl(url: string): boolean {
   return url.startsWith('blob:') || url.startsWith('/api/');
 }
 
+/** 回收不再被引用的本地 blob URL：keep = 当前队列 ∪ 当前曲目 ∪ 播放历史 ∪ 收藏 */
+function releaseOrphanedBlobUrls(): void {
+  const { playlist, currentTrack } = usePlayerStore.getState();
+  const keep = new Set<string>();
+  for (const t of playlist) keep.add(t.id);
+  if (currentTrack) keep.add(currentTrack.id);
+  for (const t of useHistoryStore.getState().history) keep.add(t.id);
+  for (const t of useFavoritesStore.getState().favorites) keep.add(t.id);
+  releaseBlobUrlsExcept(keep);
+}
+
 export async function playTrack(
+  track: AudioTrack,
+  queue?: AudioTrack[],
+  index = -1,
+  opts: { autoAdvance?: boolean } = {}
+): Promise<void> {
+  // 换队列可能孤儿化旧队列里的本地 blob URL —— 无论播放成败，收尾时按引用回收
+  const previousPlaylistHadBlobs = usePlayerStore.getState().playlist.some((t) => t.url.startsWith('blob:'));
+  try {
+    await doPlayTrack(track, queue, index, opts);
+  } finally {
+    if (previousPlaylistHadBlobs) releaseOrphanedBlobUrls();
+  }
+}
+
+async function doPlayTrack(
   track: AudioTrack,
   queue?: AudioTrack[],
   index = -1,
@@ -269,6 +297,19 @@ export async function playTrack(
     applyCoverTint(track.cover);
     // 离线节拍分析（异步，完成后歌词溢光切到精确节拍驱动）
     startBeatAnalysis(fullTrack);
+    // MediaSession 元数据：后台/锁屏的 OS 媒体面板显示曲名/歌手/封面
+    try {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.name,
+          artist: track.artist,
+          album: track.album,
+          artwork: track.cover ? [{ src: track.cover, sizes: '512x512', type: 'image/jpeg' }] : []
+        });
+      }
+    } catch { /* 不支持：忽略 */ }
+    // 播放成功 → 该曲目的中断重试计数清零
+    if (errRetryState.trackId === fullTrack.id) errRetryState.count = 0;
   };
 
   const loadAndFinish = async (): Promise<boolean> => {
@@ -327,6 +368,41 @@ usePlayerStore.getState().setPlayIndexDelegate((index) => {
   const track = playlist[index];
   if (track) playTrack(track, playlist, index, { autoAdvance: true });
 });
+
+// ============================================================
+// 后台播放中断的自动恢复（2026-09-11 排查：歌曲中途流断掉/挂死此前没有任何重试，
+// 后台听一段时间就会永久停止）。
+// ============================================================
+const errRetryState = { trackId: '', count: 0, at: 0 };
+audioEngine.setOnTrackError(() => {
+  const { currentTrack, loading } = usePlayerStore.getState();
+  // loading=true 说明是切歌加载管线自身的失败 → doPlayTrack 内部已有 fresh 重试，别抢
+  if (!currentTrack || loading) return;
+  if (errRetryState.trackId !== currentTrack.id) {
+    errRetryState.trackId = currentTrack.id;
+    errRetryState.count = 0;
+    errRetryState.at = 0;
+  }
+  // 指数退避（30s → 最长 10min）：网络长时间不可用时不会无限刷重试
+  const backoff = Math.min(30_000 * 2 ** errRetryState.count, 600_000);
+  const now = Date.now();
+  if (now - errRetryState.at < backoff) return;
+  errRetryState.count += 1;
+  errRetryState.at = now;
+  useUIStore.getState().showToast(`「${currentTrack.name}」播放中断，正在自动恢复…`);
+  // 队列/索引不动（queue 省略），地址由 doPlayTrack 的 fresh 重试重新解析
+  void playTrack(currentTrack, undefined, -1, { autoAdvance: true });
+});
+
+// OS 媒体键（后台/锁屏的硬件与系统面板控制）：接回播放器动作
+if ('mediaSession' in navigator) {
+  try {
+    navigator.mediaSession.setActionHandler('play', () => usePlayerStore.getState().play());
+    navigator.mediaSession.setActionHandler('pause', () => usePlayerStore.getState().pause());
+    navigator.mediaSession.setActionHandler('previoustrack', () => usePlayerStore.getState().prevTrack());
+    navigator.mediaSession.setActionHandler('nexttrack', () => usePlayerStore.getState().nextTrack());
+  } catch { /* 不支持：忽略 */ }
+}
 
 /** 恢复上次会话：刷新后还原队列/当前曲目/进度（暂停态，点播放从上次位置继续） */
 export async function restoreSession(): Promise<void> {
