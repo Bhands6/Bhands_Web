@@ -1,6 +1,7 @@
 import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { resolveVipTier, vipBadgeLabel } from '../utils/vipTier';
 
 const BRAND = 'Bhands Music'.split('');
 
@@ -11,6 +12,10 @@ export default function TopCorners() {
   const loggedIn = useUserStore((s) => s.loggedIn);
   const panelOpen = useSettingsStore((s) => s.panelOpen);
   const togglePanel = useSettingsStore((s) => s.togglePanel);
+
+  // 会员标识：只有登录且解析出等级时才渲染（非会员保持原样式，不占位）
+  const vipTier = loggedIn ? resolveVipTier(user) : 'none';
+  const vipLabel = vipBadgeLabel(vipTier);
 
   // 回到 Home 视图：不打断播放（音乐继续、控制栏保持）
   const goHome = () => {
@@ -60,10 +65,19 @@ export default function TopCorners() {
         </button>
         <button
           id="user-btn"
-          className={`icon-btn ${loggedIn ? 'logged-in' : 'logged-out'}`}
+          className={`icon-btn ${loggedIn ? 'logged-in' : 'logged-out'}${vipTier !== 'none' ? ` vip-${vipTier}` : ''}`}
           onClick={() => setLoginModalOpen(true)}
-          title={loggedIn ? `已登录：${user?.nickname || ''}` : '登录账号'}
+          title={
+            loggedIn
+              ? `已登录：${user?.nickname || ''}${vipLabel ? ` · ${vipLabel} 会员` : ''}`
+              : '登录账号'
+          }
         >
+          {vipLabel && (
+            <span className={`vip-badge vip-${vipTier}`} aria-label={`${vipLabel} 会员`}>
+              {vipLabel}
+            </span>
+          )}
           {loggedIn ? (
             user?.avatar ? (
               <img src={user.avatar} alt="" className="user-avatar" />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
 import { userApi } from '../api/user';
+import { resolveVipTier, vipBadgeLabel } from '../utils/vipTier';
 
 type QrPhase = 'creating' | 'waiting' | 'scanned' | 'success' | 'expired' | 'error';
 
@@ -105,6 +106,9 @@ export default function LoginModal() {
 
   // 已登录：展示账号信息
   if (loggedIn) {
+    // 与顶栏角标共用同一套判定，避免两处显示不一致
+    const vipTier = resolveVipTier(user);
+    const vipLabel = vipBadgeLabel(vipTier);
     return (
       <div className="modal-mask show" onClick={handleMaskClick}>
         <div className="modal dual-user-modal">
@@ -116,7 +120,7 @@ export default function LoginModal() {
           />
           <div style={{ fontSize: 15, marginBottom: 4 }}>{user?.nickname || '我'}</div>
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 20, letterSpacing: '.5px' }}>
-            {user?.vip ? `网易云音乐 · VIP 会员` : '网易云音乐 · 普通账号'}
+            {vipLabel ? `网易云音乐 · ${vipLabel} 会员` : '网易云音乐 · 普通账号'}
           </div>
           <div className="btn-row">
             <button className="modal-btn" onClick={() => refreshPlaylists()}>刷新歌单</button>

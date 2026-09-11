@@ -451,7 +451,11 @@ body.desktop-shell.desktop-fullscreen #upload-actions{margin-top:0}
 .upload-tip-title{display:block;color:#fff0bf;font-weight:700;margin-bottom:2px}
 .upload-tip-close{position:absolute;right:9px;top:8px;width:18px;height:18px;border:0;border-radius:50%;background:transparent;color:rgba(255,255,255,.38);cursor:pointer;font-size:15px;line-height:18px;padding:0;font-family:inherit}
 .upload-tip-close:hover{background:rgba(255,255,255,.08);color:#fff}
-#user-btn{padding:0 16px;width:auto;min-width:58px;height:44px;border-radius:24px;gap:8px;font-size:12px;letter-spacing:.4px}
+/* ⚠️ position:relative 是角标定位的**基准**，不能删：
+   角标用 left:50% + translateX(-50%) 居中，百分比相对最近的定位祖先解析。
+   若这里没有 position，角标会相对 #top-right 定位 → 跑到相邻的「主页」按钮下方；
+   而 hover 时按钮的 transform 会让它临时成为包含块，所以只在悬停时显示正常。 */
+#user-btn{position:relative;padding:0 16px;width:auto;min-width:58px;height:44px;border-radius:24px;gap:8px;font-size:12px;letter-spacing:.4px}
 .user-capsule-hide-btn{width:18px;height:28px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);color:rgba(255,255,255,.34);font-size:11px;line-height:1;opacity:0;transform:translateX(6px) scale(.92);transition:opacity .18s,transform .18s,background .18s,color .18s,border-color .18s;cursor:pointer}
 #top-right:hover .user-capsule-hide-btn,.user-capsule-hide-btn.on{opacity:1;transform:translateX(0) scale(1)}
 .user-capsule-hide-btn:hover,.user-capsule-hide-btn.on{border-color:rgba(var(--fc-accent-rgb),.34);background:rgba(var(--fc-accent-rgb),.10);color:#fff}
@@ -550,6 +554,28 @@ body.desktop-shell.empty-home-active.controls-visible #empty-home{bottom:126px;t
 #user-btn.logged-in:has(.user-avatar){width:44px;height:44px;min-width:44px;padding:0;border-radius:50%;overflow:visible;box-shadow:none!important;border-color:transparent!important;background:transparent!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 #user-btn .user-avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;display:block;box-shadow:0 0 0 2px rgba(244,210,138,.75),0 0 16px rgba(244,210,138,.28),0 14px 42px rgba(0,0,0,.28)}
 #user-btn.logged-in:has(.user-avatar):hover .user-avatar{box-shadow:0 0 0 2px rgba(244,210,138,.95),0 0 24px rgba(244,210,138,.48),0 14px 42px rgba(0,0,0,.28)}
+/* 头像旁的会员标识（VIP / SVIP）：
+   挂在头像正下方居中（按钮已是 overflow:visible 的 44px 圆），
+   配色沿用网易云官方：金=S VIP（金 V）/红 VIP（#EC4141 招牌红）。
+   未登录或非会员时 <span> 根本不渲染 → 保持原有样式与占位，不会留空位。 */
+#user-btn .vip-badge{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);z-index:2;
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:1px 4px;border-radius:5px;
+  font-size:8px;font-weight:800;letter-spacing:.3px;line-height:1.25;
+  /* 细描边用外层按钮背景色，让标识从头像边缘"浮"出来，不与头像糊在一起 */
+  border:1.5px solid rgba(12,10,14,.92);
+  pointer-events:none;white-space:nowrap;
+  background:linear-gradient(135deg,#fff3c2,var(--champagne),#c9963d);color:#201303;
+  box-shadow:0 2px 8px rgba(0,0,0,.42),0 0 10px rgba(244,210,138,.42)}
+/* 无头像时按钮是 auto 宽度的胶囊（padding 0 16px 0 4px），角标贴右侧中部 */
+#user-btn.logged-in:not(:has(.user-avatar)) .vip-badge{left:auto;right:4px;bottom:50%;transform:translateY(50%)}
+#user-btn .vip-badge.vip-svip{background:linear-gradient(135deg,#fff6d0,#f4d28a,#b8862c);color:#1c1102;
+  box-shadow:0 2px 8px rgba(0,0,0,.42),0 0 12px rgba(244,210,138,.55)}
+/* VIP：网易云官方招牌红 #EC4141（纯色，不用渐变 —— 原版就是实心红底白字） */
+#user-btn .vip-badge.vip-vip{background:#EC4141;color:#fff;border-color:#a82323;
+  text-shadow:0 1px 1px rgba(120,10,10,.45);
+  box-shadow:0 2px 8px rgba(0,0,0,.42),0 0 12px rgba(236,65,65,.62)}
+#user-btn.logged-in:hover .vip-badge{filter:brightness(1.1)}
 #user-btn.multi-account{height:auto;min-width:0;padding:0;flex-direction:column;align-items:flex-end;gap:7px;border:0;background:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
 #user-btn.multi-account:hover{background:transparent;border-color:transparent;box-shadow:none;transform:none;color:#fff}
 #user-avatar{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,0.1)}

@@ -138,3 +138,24 @@ export const useUserStore = create<UserState>((set) => ({
     set({ playlistsLoading: false });
   }
 }));
+
+// ── 调试用：仅在 dev 生效，方便在控制台查看 VIP / SVIP 角标 ─────────────
+// 用法（浏览器控制台）：
+//   __vip(1)   → 顶栏头像旁出现青蓝 VIP 角标
+//   __vip(2)   → 金色 SVIP 角标（3 / 11 等同理）
+//   __vip(0)   → 移除角标，恢复普通账号
+// 生产构建下这段会被摇掉（不污染线上包）。
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__vip = (vipType: number) => {
+    const cur = useUserStore.getState().user;
+    if (!cur) {
+      console.warn('[__vip] 当前未登录，先登录再调用（角标只在已登录时渲染）');
+      return;
+    }
+    useUserStore.setState({
+      user: { ...cur, vipType, vip: vipType > 0 }
+    });
+    console.log(`[__vip] vipType=${vipType} 已应用`, useUserStore.getState().user);
+  };
+}
+
