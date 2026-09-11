@@ -71,11 +71,11 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   burst: { radius: 6.6, phi: 0.06 },
   // 声波地形：贴地看才读得出「地形」——phi 大一点俯视、半径拉远容纳 13×9 的地块
   sonic: { radius: 9.2, phi: 0.30 },
-  // 螺旋星云：盘半径 6.4（见 particleShaders.ts 的 SPIRAL_RMAX）+ 外缘。
-  // ⚠️ 这里的 radius 与 SPIRAL_RMAX 是**一对**，必须一起调：盘放大了相机不拉近，
-  //    星云就缩在画面中央（用户反馈「太小」）；相机太近又会把外缘切掉。
-  //    FOV45 下横向可见半宽 ≈ radius · 0.5969（16:9）→ 8.8 · 0.5969 ≈ 5.25，
-  //    盘半径 6.4 略超出取景框，让星云"铺满画面"，超出部分由 vAlpha 淡出窗口收住。
+  // 螺旋星云：盘半径 7.4（见 particleShaders.ts 的 SPIRAL_RMAX）+ 外缘。
+  // ⚠️ 这里的 radius 与 SPIRAL_RMAX 是**一对**：2026-09-11 用户要求扩大后定稿为
+  //    RMAX 7.4 + 相机 8.8 不动 —— 星云在屏上整体放大一圈，水平有意出血铺满、
+  //    外缘由 vAlpha 淡出窗口收住。再想放大优先加 RMAX（相机不动=屏上变大），
+  //    需要重新构图时才动 radius，否则会「缩在中央」或「切掉外缘」。
   spiral: { radius: 8.8, phi: 0.34 }
 };
 

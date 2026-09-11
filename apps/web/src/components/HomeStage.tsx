@@ -5,6 +5,7 @@ import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
 import { useHistoryStore } from '../stores/useHistoryStore';
 import { playTrack, playPlaylist, songItemToTrack } from '../services/playService';
+import { readString, writeString } from '../utils/safeStorage';
 
 const WEATHER_CITY_KEY = 'weatherCity';
 
@@ -90,7 +91,7 @@ export default function HomeStage() {
   }, []);
 
   // 天气（城市记忆在本地，默认上海）
-  const [city, setCity] = useState(() => localStorage.getItem(WEATHER_CITY_KEY) || '上海');
+  const [city, setCity] = useState(() => readString(WEATHER_CITY_KEY) || '上海');
   const [weather, setWeather] = useState<WeatherInfo | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [radioStarting, setRadioStarting] = useState(false);
@@ -254,7 +255,7 @@ export default function HomeStage() {
   const changeCity = () => {
     const next = (window.prompt('输入城市名（如：北京 / Tokyo）', city) || '').trim();
     if (!next || next === city) return;
-    localStorage.setItem(WEATHER_CITY_KEY, next);
+    writeString(WEATHER_CITY_KEY, next);
     setCity(next);
   };
 

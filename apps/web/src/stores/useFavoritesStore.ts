@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { AudioTrack } from '../audio/AudioEngine';
+import { readJson, writeJson } from '../utils/safeStorage';
 
 interface FavoritesState {
   favorites: AudioTrack[];
@@ -14,7 +15,8 @@ interface FavoritesState {
 }
 
 export const useFavoritesStore = create<FavoritesState>((set, get) => ({
-  favorites: JSON.parse(localStorage.getItem('favorites') || '[]'),
+  // 安全读：坏 JSON 回退空数组（模块顶层裸 parse 曾是整站白屏隐患）
+  favorites: readJson<AudioTrack[]>('favorites', []),
   
   addToFavorites: (track: AudioTrack) => {
     const { favorites } = get();
@@ -27,15 +29,15 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
     const newFavorites = [track, ...favorites];
     
     set({ favorites: newFavorites });
-    localStorage.setItem('favorites', JSON.stringify(newFavorites));
+    writeJson('favorites', newFavorites);
   },
-  
+
   removeFromFavorites: (trackId: string) => {
     const { favorites } = get();
     const newFavorites = favorites.filter(item => item.id !== trackId);
-    
+
     set({ favorites: newFavorites });
-    localStorage.setItem('favorites', JSON.stringify(newFavorites));
+    writeJson('favorites', newFavorites);
   },
   
   isFavorite: (trackId: string) => {

@@ -81,7 +81,12 @@ export class AudioEngine {
 
   /** 首次用户手势时调用，解锁 AudioContext */
   public unlock(): void {
-    this.ensureContext();
+    // restoreSession 可能在**无用户手势**时提前创建了 suspended 的 AudioContext
+    // （ensureContext 只创建不 resume）。unlock 必然发生在手势内，正好补一次 resume ——
+    // 否则会出现 isPlaying=true 但音频图仍 suspended → 「看着在播、实际无声」。
+    if (this.ensureContext() && this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => { /* 手势态 resume 失败：play() 里还会再试 */ });
+    }
   }
 
   private ensureContext(): boolean {
@@ -213,8 +218,9 @@ export class AudioEngine {
 
   public play(): void {
     if (!this.audioElement || !this.audioContext) return;
+    if (!this.audioElement.src) return; // 空队列无曲目：直接忽略，避免误报「播放被浏览器拦截」
     if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
+      this.audioContext.resume().catch(() => { /* resume 失败由下方 play().catch 统一提示 */ });
     }
     this.audioElement.play().then(() => {
       this.state.isPlaying = true;

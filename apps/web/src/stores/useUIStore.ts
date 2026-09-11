@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { readString, writeString } from '../utils/safeStorage';
 
 export type PlayQuality = 'jymaster' | 'hires' | 'lossless' | 'exhigh' | 'standard';
 
@@ -96,21 +97,21 @@ const CONTROLS_AUTO_HIDE_STORE_KEY = 'bhandsmusic-controls-auto-hide-v1';
 
 const QUALITY_VALUES: PlayQuality[] = ['jymaster', 'hires', 'lossless', 'exhigh', 'standard'];
 function readPersistedQuality(): PlayQuality {
-  const saved = localStorage.getItem(QUALITY_STORE_KEY) as PlayQuality | null;
+  const saved = readString(QUALITY_STORE_KEY) as PlayQuality | null;
   return saved && QUALITY_VALUES.includes(saved) ? saved : 'exhigh';
 }
 function readPersistedAutoHide(): boolean {
   // 默认开启「底部悬停唤起 / 离开收缩」；仅当用户显式关闭过才读取持久化值
-  const saved = localStorage.getItem(CONTROLS_AUTO_HIDE_STORE_KEY);
+  const saved = readString(CONTROLS_AUTO_HIDE_STORE_KEY);
   return saved === null ? true : saved === '1';
 }
 
 const LYRIC_MODE_STORE_KEY = 'bhandsmusic-lyric-mode-v1';
 function readPersistedLyricMode(): LyricMode {
-  const saved = localStorage.getItem(LYRIC_MODE_STORE_KEY);
+  const saved = readString(LYRIC_MODE_STORE_KEY);
   if (saved === 'single' || saved === 'hidden' || saved === 'multi') return saved;
   // 旧版「隐藏歌词」开关迁移
-  if (localStorage.getItem('bhandsmusic-lyrics-visible') === '0') return 'hidden';
+  if (readString('bhandsmusic-lyrics-visible') === '0') return 'hidden';
   return 'multi';
 }
 
@@ -149,13 +150,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleLyrics: () =>
     set((s) => ({ lyricMode: s.lyricMode === 'hidden' ? 'multi' : 'hidden' })),
   setLyricMode: (mode) => {
-    localStorage.setItem(LYRIC_MODE_STORE_KEY, mode);
+    writeString(LYRIC_MODE_STORE_KEY, mode);
     set({ lyricMode: mode });
   },
   cycleLyricMode: () => {
     const order: LyricMode[] = ['multi', 'single', 'hidden'];
     const next = order[(order.indexOf(get().lyricMode) + 1) % order.length];
-    localStorage.setItem(LYRIC_MODE_STORE_KEY, next);
+    writeString(LYRIC_MODE_STORE_KEY, next);
     set({ lyricMode: next, lyricsVisible: next !== 'hidden' });
   },
 
@@ -166,14 +167,14 @@ export const useUIStore = create<UIState>((set, get) => ({
   controlsHidden: false,
   toggleControlsAutoHide: () => {
     const next = !get().controlsAutoHide;
-    localStorage.setItem(CONTROLS_AUTO_HIDE_STORE_KEY, next ? '1' : '0');
+    writeString(CONTROLS_AUTO_HIDE_STORE_KEY, next ? '1' : '0');
     set({ controlsAutoHide: next });
   },
   setControlsHidden: (hidden) => set({ controlsHidden: hidden }),
 
   quality: readPersistedQuality(),
   setQuality: (q) => {
-    localStorage.setItem(QUALITY_STORE_KEY, q);
+    writeString(QUALITY_STORE_KEY, q);
     set({ quality: q });
   },
 

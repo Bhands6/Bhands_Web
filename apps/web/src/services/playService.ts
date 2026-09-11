@@ -332,6 +332,10 @@ usePlayerStore.getState().setPlayIndexDelegate((index) => {
 export async function restoreSession(): Promise<void> {
   const snap = readSessionSnapshot();
   if (!snap) return;
+  // 竞态守卫：恢复是异步的（解析地址可能数秒），期间用户点播新歌会让 playToken 递增。
+  // 恢复流程必须在每个 await 之后检查并退出 —— 否则 setCurrentTrack 会替换共享 <audio>
+  // 的 src，**打断用户正在播的歌**并停在暂停态。
+  const tokenAtStart = playToken;
   const player = usePlayerStore.getState();
   const track = snap.playlist[snap.currentIndex];
   if (!track) return;
@@ -347,11 +351,13 @@ export async function restoreSession(): Promise<void> {
   let url = isDirectPlayableUrl(track.url) ? track.url : '';
   if (!url) {
     const resolved = await resolveTrackUrl(track.id);
-    if (!resolved) return; // 地址解析失败：保留队列，用户点播时走常规重试
+    if (!resolved || playToken !== tokenAtStart) return; // 地址解析失败：保留队列，用户点播时走常规重试
     url = resolved.url;
   }
+  if (playToken !== tokenAtStart) return; // 恢复期间用户已点播新歌
   try {
     await player.setCurrentTrack({ ...track, url }, { autoplay: false });
+    if (playToken !== tokenAtStart) return; // 加载期间用户已点播新歌
     if (snap.currentTime > 1) player.seek(Math.min(snap.currentTime, player.duration || snap.currentTime));
     // 歌词 + 封面氛围（与 playTrack 的 finish 一致，但不写播放历史）
     const lyrics = useLyricsStore.getState();

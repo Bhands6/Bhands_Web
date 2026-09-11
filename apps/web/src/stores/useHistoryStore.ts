@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { AudioTrack } from '../audio/AudioEngine';
+import { readJson, writeJson } from '../utils/safeStorage';
 
 interface HistoryState {
   history: AudioTrack[];
@@ -13,7 +14,8 @@ interface HistoryState {
 }
 
 export const useHistoryStore = create<HistoryState>((set, get) => ({
-  history: JSON.parse(localStorage.getItem('playHistory') || '[]'),
+  // 安全读：坏 JSON 回退空数组（模块顶层裸 parse 曾是整站白屏隐患）
+  history: readJson<AudioTrack[]>('playHistory', []),
   maxHistory: 100,
   
   addToHistory: (track: AudioTrack) => {
@@ -26,15 +28,15 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     const newHistory = [track, ...filteredHistory].slice(0, maxHistory);
     
     set({ history: newHistory });
-    localStorage.setItem('playHistory', JSON.stringify(newHistory));
+    writeJson('playHistory', newHistory);
   },
-  
+
   removeFromHistory: (trackId: string) => {
     const { history } = get();
     const newHistory = history.filter(item => item.id !== trackId);
-    
+
     set({ history: newHistory });
-    localStorage.setItem('playHistory', JSON.stringify(newHistory));
+    writeJson('playHistory', newHistory);
   },
   
   clearHistory: () => {

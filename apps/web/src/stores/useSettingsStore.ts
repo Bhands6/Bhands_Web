@@ -222,7 +222,10 @@ function applyCssVars(lyrics: LyricsSettings, visual: VisualSettings): void {
 }
 
 function persist(visual: VisualSettings, lyrics: LyricsSettings): void {
-  localStorage.setItem(STORE_KEY, JSON.stringify({ visual, lyrics }));
+  // 隐私模式/配额满时吞异常（设置写失败非致命，内存态仍在）
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ visual, lyrics }));
+  } catch { /* 非致命 */ }
 }
 
 const initial = loadPersisted();
