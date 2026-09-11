@@ -14,6 +14,12 @@ coverage/
 build/
 dist/
 
+# 临时调试产物（源文件切片、探针脚本等，不要提交）
+.workbuddy-head.txt
+.workbuddy-tail.txt
+__*-probe.mts
+__*-probe.ts
+
 # Misc
 .DS_Store
 .env.local
