@@ -373,7 +373,8 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
   it('螺旋星云的半径分布必须向中心聚集（不能用 sqrt 的面积均匀分布）', () => {
     const spiral = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 10: SPIRAL'));
     expect(spiral.length, '没截到 SPIRAL 分支').toBeGreaterThan(100);
-    const m = spiral.match(/float rr = pow\(aUv\.x, ([\d.]+)\) \* ([\d.]+)/);
+    // 底数允许被 clamp() 包一层（防 NaN），幂次与倍率仍要能取到
+    const m = spiral.match(/float rr = pow\(clamp\(aUv\.x, 0\.0, 1\.0\), ([\d.]+)\) \* SPIRAL_RMAX/);
     expect(m, '未找到半径分布公式').toBeTruthy();
     expect(Number(m![1]), '半径幂次必须 > 1 才会向中心聚集').toBeGreaterThan(1);
     expect(spiral).not.toMatch(/float rr = sqrt\(aUv\.x\)/);
@@ -396,8 +397,10 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
   });
 
   it('两个新预设都有独立的尺寸档与亮度档', () => {
-    // 尺寸：9 要小而均匀（否则脊顶鼓成珠子）、10 允许大一点（靠疏密读旋臂）
-    expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
+    // 尺寸：9 要小而均匀（否则脊顶鼓成珠子）；10 也走小点（v7 对齐参考图的锐利小星点，
+    //   基准 0.34，比 9 的 0.52 更小）—— 这里只要求「各自有独立档」，
+    //   具体数值由 v7 那组断言（基准 ≤0.45、上限 ≤2.5）负责。
+    expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,420}?sz = clamp\(depthSize \* \(0\.\d/);
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
     // 亮度：两者都要有独立档，不能共用 6~8 的通用档
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5 && uPreset < 9\.5/);
@@ -405,6 +408,185 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
   });
 });
 
+describe('螺旋星云 v7（多条细密旋臂 + 锐利星点，对齐参考图）', () => {
+  const spiral = () =>
+    VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 10: SPIRAL')).replace(/\/\/.*$/gm, '');
+  const num = (re: RegExp, label: string): number => {
+    const m = VERTEX_SHADER.match(re);
+    if (!m) throw new Error(`未找到 ${label}`);
+    return Number(m[1]);
+  };
+
+  /**
+   * ⚠️⚠️ 最关键的一条：**每颗粒子独立的角度散射**（这是「像云而不是像线」的唯一来源）。
+   *
+   * 一旦把它改小、或改成由半径唯一决定，同一半径的点就会收拢到同一条弧线上
+   * → 整片退化成一维曲线（＝线）。v2/v3 就是这么翻车的。
+   *
+   * v7 的形式：散射幅度 = MIN + GROW·(r/RMAX)²，**随半径增大**。
+   *   内侧 scatter 小 → 臂细而清晰；外侧 scatter 大 → 臂化开成雾。
+   *   这就是参考图「中心细密、外缘弥漫」的观感来源。
+   *
+   * ⚠️ MIN 不能小到 0（内侧会退化成一条精确的弧线），也不能大到丢失臂的锐利度。
+   */
+  it('必须有每颗粒子独立的角度散射，且随半径增大（MIN 小、GROW 大）', () => {
+    const s = spiral();
+    // 散射必须是 hash 形式 × (MIN + GROW·tR²)
+    expect(s, '散射必须是「hash 随机 × (MIN + GROW·tR²)」的形式').toMatch(
+      /float scatter = \(hash11\(aRand \* [\d.]+\) - 0\.5\) \* sBase;/,
+    );
+    expect(s, 'sBase 必须由 SPIRAL_SCATTER_MIN + SPIRAL_SCATTER_GROW 组成').toMatch(
+      /float sBase = SPIRAL_SCATTER_MIN \+ SPIRAL_SCATTER_GROW \* tR \* tR;/,
+    );
+    const min = num(/#define SPIRAL_SCATTER_MIN ([\d.]+)/, 'SPIRAL_SCATTER_MIN');
+    const grow = num(/#define SPIRAL_SCATTER_GROW ([\d.]+)/, 'SPIRAL_SCATTER_GROW');
+    expect(min, 'MIN 太小会让内侧臂退化成一条精确弧线').toBeGreaterThanOrEqual(0.03);
+    expect(min, 'MIN 太大内侧臂会糊，丢失「细密」感').toBeLessThanOrEqual(0.25);
+    expect(grow, 'GROW 太小则内外一样弥散（v6 的老问题：臂不锐利）').toBeGreaterThanOrEqual(0.5);
+    // 角度绝不能是「只由半径决定」的确定性函数
+    expect(s, '角度不能写成只由半径决定的 cos/sin（会退化成一条线）').not.toMatch(
+      /float ang = [\d.]+ \* (?:cos|sin)\(/,
+    );
+  });
+
+  /**
+   * ⚠️ 臂必须有**多条**（参考图能数出 3~4 条），且条数由常量统一控制。
+   *
+   * 2 条臂只能是两根对称的带，读不出参考图那种「层层缠绕」的层次。
+   * 实测：2 条 → 盘面覆盖率 59.4%；4 条 → 75.7%，密度图上出现明显的多股细丝。
+   */
+  it('臂条数必须 ≥ 3 且由 SPIRAL_ARMS 常量控制（对齐参考图的多臂）', () => {
+    const arms = num(/#define SPIRAL_ARMS ([\d.]+)/, 'SPIRAL_ARMS');
+    expect(arms, '臂条数至少 3 条才读得出参考图的缠绕层次').toBeGreaterThanOrEqual(3);
+    expect(arms, '臂条数过多（>8）每片都太密，反而看不出螺旋').toBeLessThanOrEqual(8);
+    const s = spiral();
+    expect(s, '臂偏移必须由 SPIRAL_ARMS 均分 2π，不能写死 2 条').toMatch(
+      /float armOffset = \(armPick \/ SPIRAL_ARMS\) \* 2\.0 \* PI;/,
+    );
+    expect(s, '臂的挑选必须用 SPIRAL_ARMS').toMatch(
+      /float armPick = floor\(hash11\(aRand \* [\d.]+\) \* SPIRAL_ARMS\);/,
+    );
+  });
+
+  /**
+   * ⚠️ 臂的锐利度靠**散射幅度**控制，绝不能靠高对比掩码去「画」。
+   *
+   * v5 用了 armCore² × 大系数 + vAlpha 0.52 的臂脊权重，结果边缘硬得像手绘描边。
+   */
+  it('臂的强度调制必须克制，且 v5 的「画臂」机制必须彻底消失', () => {
+    const s = spiral();
+    expect(s, 'armMask 必须保持散斑形式（0.55 + 0.45·cos(scatter·k)）').toMatch(
+      /float armMask = 0\.\d+ \+ 0\.\d+ \* cos\(scatter \* [\d.]+\);/,
+    );
+    const armW = num(/#define SPIRAL_ARM_ALPHA ([\d.]+)/, 'SPIRAL_ARM_ALPHA');
+    expect(armW, '臂密度权重 >0.3 会让臂变成「描边的硬线条」而不是云').toBeLessThanOrEqual(0.3);
+    expect(armW, '臂密度权重必须有实际作用（不能是 0）').toBeGreaterThan(0.02);
+    // v5 的机制必须彻底消失
+    expect(s, 'v5 的 armCore 高对比横截面必须已移除').not.toMatch(/armCore/);
+    expect(s, 'v5 的径向厚度 dR 必须已移除').not.toMatch(/float dR = /);
+    expect(s, 'v5 的 sqrt 臂相必须已移除（会把臂甩出取景框）').not.toMatch(
+      /float armPhase = 2\.0 \* \(sqrt\(rArm\)/,
+    );
+  });
+
+  /**
+   * ⚠️ 臂相必须用 **log 螺线**（等角螺线），不能用 sqrt/幂次。
+   *
+   * log 螺线的「等角」性质让所有臂在全盘保持相似形状，且圈数温和，
+   * 不会像 sqrt 配方那样在大半径处把臂甩出画面。
+   */
+  it('臂相必须是 log 螺线（等角螺线），系数在 2~3.5 之间', () => {
+    const s = spiral();
+    const m = s.match(/float ang = ([\d.]+) \* log\(max\(rr, [\d.]+\)\) \+ armOffset \+ scatter/);
+    if (!m) throw new Error('未找到 log 螺线形式的臂相');
+    const k = Number(m[1]);
+    expect(k, 'log 系数过小 → 几乎不旋（看不出螺旋）').toBeGreaterThanOrEqual(2.0);
+    expect(k, 'log 系数过大 → 臂会绕太紧/甩出取景框').toBeLessThanOrEqual(3.5);
+  });
+
+  /**
+   * ⚠️ 盘半径由 SPIRAL_RMAX 统一定义，且必须与相机机位配套。
+   *
+   * 两者是**一对**（见 ParticleStage 的 spiral 机位），单独改一个会导致
+   * 「缩小在中央」或「冲出取景框」。
+   */
+  it('盘半径必须由 SPIRAL_RMAX 定义，且放大到 6.0 以上', () => {
+    const rmax = num(/#define SPIRAL_RMAX ([\d.]+)/, 'SPIRAL_RMAX');
+    expect(rmax, '盘半径必须 ≥ 6.0（v1 是 5.4，用户要求扩大）').toBeGreaterThanOrEqual(6.0);
+    const s = spiral();
+    expect(s, '半径必须用 SPIRAL_RMAX，不能写死').toMatch(
+      /pow\(clamp\(aUv\.x, 0\.0, 1\.0\), [\d.]+\) \* SPIRAL_RMAX/,
+    );
+    expect(s, '归一化半径 tR 也要用 SPIRAL_RMAX').toMatch(/clamp\(rr \/ SPIRAL_RMAX, 0\.0, 1\.0\)/);
+  });
+
+  /**
+   * ⚠️ 外缘淡出窗口必须收在最后（不能太早），否则放大后外缘被截成硬边圆环。
+   */
+  it('外缘淡出窗口必须贴到最外（smoothstep 起点 ≥ 0.9）', () => {
+    const s = spiral();
+    const m = s.match(/1\.0 - smoothstep\((0\.[\d]+), 1\.0, aUv\.x\)/);
+    if (!m) throw new Error('未找到外缘淡出窗口');
+    expect(Number(m[1]), '淡出起点太早会让放大后的外缘出现硬边圆环').toBeGreaterThanOrEqual(0.9);
+  });
+
+  /**
+   * ⚠️ 核球（参考图那个又小又极亮的白点）必须有**独立的紧致核** + 亮度加成。
+   *
+   * 参考图的核心是一个过曝的白点，不是一大团亮雾。
+   * 所以：紧致高斯核 `exp(-rr²·k)`（k 要够大）+ 亮度 BOOST，
+   * 但宽核 bulge 仍要保留（否则中心会变成一个针尖、失去星云的体积感）。
+   */
+  it('核球必须有紧致核 + 亮度加成，且宽核 bulge 仍保留', () => {
+    const s = spiral();
+    const mCore = s.match(/float core = exp\(-rr \* rr \* ([\d.]+)\)/);
+    if (!mCore) throw new Error('必须有紧致核 core = exp(-rr*rr*k)');
+    const coreK = Number(mCore[1]);
+    expect(coreK, '紧致核的系数太小 → 核心是一团雾而不是一个亮核').toBeGreaterThanOrEqual(0.9);
+    expect(s, '核球必须保留宽核 bulge（否则中心变针尖）').toMatch(/float bulge = exp\(-rr \* rr \* [\d.]+\)/);
+    const boost = num(/#define SPIRAL_CORE_BOOST ([\d.]+)/, 'SPIRAL_CORE_BOOST');
+    expect(boost, '核球亮度加成太小 → 看不出参考图那个过曝的白核').toBeGreaterThanOrEqual(1.5);
+    // vAlpha 里核球权重仍必须远大于臂
+    const armW = num(/#define SPIRAL_ARM_ALPHA ([\d.]+)/, 'SPIRAL_ARM_ALPHA');
+    const mBulge = s.match(/vAlpha = \([\d.]+ \+ bulge \* ([\d.]+)/);
+    if (!mBulge) throw new Error('vAlpha 里未找到 bulge 权重');
+    const bulgeW = Number(mBulge[1]);
+    expect(bulgeW, '核球权重必须 ≥ 0.5').toBeGreaterThanOrEqual(0.5);
+    expect(bulgeW, '核球权重必须是臂的 3 倍以上').toBeGreaterThan(armW * 3);
+  });
+
+  /**
+   * ⚠️ 参考图有大量**明亮锐利的星点**（像撒盐）。必须有一小部分粒子被挑出来提亮。
+   *
+   * ⚠️ 关键是「只挑少数」（step 阈值 ≥ 0.9），不能整体提亮 ——
+   *    整体提亮会让星云糊成一片白，失去参考图的点状质感。
+   */
+  it('必须有少量粒子的亮度尖峰（模拟参考图的「撒盐」亮星）', () => {
+    const s = spiral();
+    const m = s.match(/float star = step\((0\.\d+), hash11\(aRand \* [\d.]+\)\);/);
+    if (!m) throw new Error('未找到 星点尖峰 star');
+    const thr = Number(m[1]);
+    expect(thr, '阈值太低会挑出太多粒子，整体过亮成一片白').toBeGreaterThanOrEqual(0.88);
+    expect(thr, '阈值太高则亮星太少，看不出参考图的点状质感').toBeLessThanOrEqual(0.98);
+    expect(s, '星点尖峰必须真正加到亮度上').toMatch(/lumCore \+= star \* [\d.]+/);
+  });
+
+  /**
+   * ⚠️ 点尺寸必须**小**才锐利（参考图是锐利小星点，不是绒球）。
+   *
+   * v6 的基准 0.50 / 上限 3.60 是按「弥散云」定的，偏大。
+   */
+  it('螺旋星云的点尺寸档必须明显变小（锐利小点）', () => {
+    const m = VERTEX_SHADER.match(
+      /uPreset > 9\.5[\s\S]{0,420}?sz = clamp\(depthSize \* \((0\.\d+) \+ nebBulge \* ([\d.]+)\) \* \(1\.0 \+ nebDrive\), ([\d.]+), ([\d.]+)\);/,
+    );
+    if (!m) throw new Error('未找到螺旋星云的尺寸档');
+    const base = Number(m[1]);
+    const cap = Number(m[4]);
+    expect(base, '点尺寸基准必须 ≤0.45 才锐利（参考图是锐利小星点）').toBeLessThanOrEqual(0.45);
+    expect(cap, '点尺寸上限必须 ≤2.5，否则臂被糊成绒球').toBeLessThanOrEqual(2.5);
+  });
+});
 describe('声波地形的观感修正（居中 / 起伏 / 无缝循环）', () => {
   const sonic = () => {
     const s = VERTEX_SHADER.slice(

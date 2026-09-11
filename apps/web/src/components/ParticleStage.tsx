@@ -71,8 +71,12 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   burst: { radius: 6.6, phi: 0.06 },
   // 声波地形：贴地看才读得出「地形」——phi 大一点俯视、半径拉远容纳 13×9 的地块
   sonic: { radius: 9.2, phi: 0.30 },
-  // 螺旋星云：要能看见整个盘面（半径 5.4 + 外缘），略俯视让盘有厚度
-  spiral: { radius: 10.5, phi: 0.34 }
+  // 螺旋星云：盘半径 6.4（见 particleShaders.ts 的 SPIRAL_RMAX）+ 外缘。
+  // ⚠️ 这里的 radius 与 SPIRAL_RMAX 是**一对**，必须一起调：盘放大了相机不拉近，
+  //    星云就缩在画面中央（用户反馈「太小」）；相机太近又会把外缘切掉。
+  //    FOV45 下横向可见半宽 ≈ radius · 0.5969（16:9）→ 8.8 · 0.5969 ≈ 5.25，
+  //    盘半径 6.4 略超出取景框，让星云"铺满画面"，超出部分由 vAlpha 淡出窗口收住。
+  spiral: { radius: 8.8, phi: 0.34 }
 };
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
