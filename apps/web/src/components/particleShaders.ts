@@ -12,6 +12,7 @@ export const VERTEX_SHADER = /* glsl */ `
 precision highp float;
 uniform float uTime, uBass, uMid, uTreble, uBeat, uEnergy, uBurstAmt;
 uniform float uBurstAge;  // 距本次迸发开始的秒数（迸发预设用；只在切歌时归零，之后一直增长，不回绕）
+uniform float uGalaxyAge; // 螺旋星云差速自转的相位秒数（切入预设时归零，见 ParticleStage.tsx 的 galaxyAt）
 uniform float uPreset, uIntensity, uPointScale, uSpeed;
 uniform float uVinylSpin;
 uniform float uColorBoost, uCoverRes;
@@ -41,11 +42,11 @@ varying vec3 vColor;
 //    对 vBright / vRipple … 的读写（宏展开后 vBright 就是 vPack0.x，读写都合法）：
 //      vColor        vec3 → 1 槽
 //      vPack0        vec4 → 1 槽（原 vBright / vRipple / vEdgeBoost / vAlpha）
-//      vPack1        vec4 → 1 槽（原 vSourceLum / 流星强度 / 拖尾方向角 / 尘埃带强度）
+//      vPack1        vec4 → 1 槽（vSourceLum / 流星强度 / 拖尾方向角 / 保留位）
 //      vMeteorCenter vec2 → 1 槽（拖尾窗口中心，不能用有 y 轴歧义的 gl_PointCoord 代替）
 //    **以后要加 varying，先来这几个 vec4 里找一个空闲分量，不要新开声明。**
 varying vec4 vPack0;   // .x=vBright  .y=vRipple  .z=vEdgeBoost  .w=vAlpha
-varying vec4 vPack1;   // .x=vSourceLum  .y=vMeteor  .z=拖尾方向角(弧度)  .w=尘埃带强度(星云)
+varying vec4 vPack1;   // .x=vSourceLum  .y=vMeteor  .z=拖尾方向角(弧度)  .w=保留位
 varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 gl_FragCoord 同系）
 // 宏别名：让旧代码里的名字继续可用（宏是纯文本替换，赋值语句同样生效）
 #define vBright    vPack0.x
@@ -70,30 +71,65 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 //    （这是刻意的：让星云有"铺满画面"的观感，边缘用 vAlpha 的淡出窗口收住）。
 #define SPIRAL_RMAX 6.4
 
-// 螺旋星云的**臂条数**。
-// ⚠️ 参考图（用户提供的银河照片）里明显不止两条臂，能数出 3~4 条细密旋臂。
-//    条数多才读得出「层层缠绕」的层次；2 条臂只能是两根对称的带。
-//    ⚠️ 改了条数请同步改单测里的断言范围（1~8）。
-#define SPIRAL_ARMS 4.0
+// 螺旋星云（v8）的形态常量 —— 对齐新参考实现（三段配色 galaxy generator）：
+// 2 条主旋臂 + 线性缠绕 + pow 长尾臂内弥散 + 差速自转 + 高斯星云厚度。
 
-// 螺旋星云的**角度散射**（每颗粒子独立，这是「像云而不是像线」的唯一来源）。
-// ⚠️⚠️ 这两个常量必须配套使用：散射幅度 = MIN + GROW·(r/RMAX)²。
-//    **随半径增大**是关键 —— 内侧 scatter 小 → 臂细而清晰；外侧 scatter 大 → 臂化开成雾。
-//    这正是参考图「中心细密、外缘弥漫」的观感来源。
-//    ⚠️ MIN 不能小到 0：那会让内侧退化成一条精确的弧线（v2/v3 的坑）。
-#define SPIRAL_SCATTER_MIN 0.06
-#define SPIRAL_SCATTER_GROW 0.85
+// ---- 主旋臂数：2 条（新参考图是 2 条主旋臂 + 分支；v7 的 4 臂 log 螺线方案整体弃用）----
+#define GALAXY_BRANCHES 2.0
 
-// 螺旋星云的核球（紧致高斯核）在亮度和不透明度上的额外权重。
-// ⚠️ 参考图的核心是一个**又小又极亮**的白点，所以核函数要收紧（exp 系数 1.35）、
-//    亮度给足（BOOST）。但 0.95 宽度的 bulge 仍要保留，否则中心变成一个针尖。
-#define SPIRAL_CORE_BOOST 2.6
-#define SPIRAL_CORE_ALPHA 0.30
+// ---- 线性缠绕：spinAngle = r * SPIN，外缘比内侧缠得更紧（对齐参考实现 spin: 1.4）----
+#define GALAXY_SPIN 1.4
 
-// 螺旋星云的臂密度调制权重。
-// ⚠️ 只能给 0.1 量级。权重一大（v5 用了 0.52）臂就变成「手绘描边的硬线条」。
-//    臂是靠点的**疏密**读出来的，不是靠高对比亮带画出来的。
-#define SPIRAL_ARM_ALPHA 0.16
+// ---- 臂内弥散：幅度 = pow(h, RND_POW) * RND * r ----
+// pow 的长尾让绝大多数点贴着臂心、少量甩出成星云晕（这是「像云而不是像线」的来源）。
+// 盘面法向的分量再乘 THICKNESS 压成薄盘。
+#define GALAXY_RANDOMNESS 0.45
+#define GALAXY_RANDOMNESS_POWER 3.2
+#define GALAXY_THICKNESS 0.4
+
+// ---- 半径分布：r = pow(u, RADIAL_POW) * RMAX ----
+// 幂次 > 1 让粒子向核心聚集，中心自然形成密集亮核，不再需要单独的核球项。
+// ⚠️ 1.8（参考实现的原值）会把约 68% 的粒子压进半径一半以内 —— 18 万粒子的
+//    Demo 外圈依然够密，但本实现只有 1.4 万网格点，外圈旋臂会明显偏稀
+//    （用户反馈「外围粒子少」）。压到 1.25：外围占比 32% → 43%，核心仍比
+//    外围密（幂次 > 1，不会回到中空甜甜圈），核心亮度由 GALAXY_CORE_* 兜底。
+#define GALAXY_RADIAL_POW 1.25
+
+// ---- 差速自转：角速度 = BASE_SPIN + DIFF_SPEED / r（内快外慢，「活」的星系）----
+// ⚠️ 参考实现是 0.2/r 的纯差速 —— 那存在天文学里的「缠绕问题」：内外角速度差
+//    会让旋臂随时间越缠越紧，0.2 的系数大约 15 秒就能把 2 条臂搅成同心环
+//    （演示页面寿命短看不出来；音乐播放器里这个预设一开就是几分钟）。
+//    这里把差速降到 0.08、另给 0.05 的整体慢速自转兜底动感，并且
+//    **uGalaxyAge 从切入本预设起算**（见 ParticleStage.tsx 的 galaxyAt）——
+//    每次切进螺旋星云都从「干净的 2 条臂」开始，而不是接着上一次的缠绕继续。
+// ⚠️ 角速度公式的分母 r 在核心处趋近 0，必须夹下限（见分支里的 dSafe），
+//    否则最内层粒子每帧转过一整圈，频闪成雪花。
+#define GALAXY_BASE_SPIN 0.05
+#define GALAXY_DIFF_SPEED 0.08
+
+// ---- 盘面压扁：面内 y 分量乘上的纵横比（配合相机 phi=0.34 俯角读成「盘」）----
+#define GALAXY_FLATTEN 0.42
+
+// ---- 核球弥散：中心区向面内与深度做 3D 高斯展开 ----
+// ⚠️ 半径分布刻意把大量粒子压进核心（「中心密集亮核」的来源），但本实现的网格点
+//    尺寸远大于参考实现的 18 万小点，核心不弥散会叠成一整块过曝的白斑
+//    （实测截图：中心糊成一坨棉花、只剩一个粉白椭圆）。展开同时给出真实星系
+//    核球的立体厚度；亮度/尺寸/节拍脉冲在核心区同步补偿（见 galaxyCore）。
+// ⚠️ RADIAL_POW 降到 1.25 后核心密度约减半，弥散同步收紧（0.22 → 0.19），
+//    否则剩下的核心粒子被摊得太开，中心发虚。
+#define GALAXY_BULGE_TIGHT 0.55   // exp(-r²·k)，k 越大核球越小越紧
+#define GALAXY_BULGE_XY 0.19      // 核球面内弥散 σ（世界单位）
+#define GALAXY_BULGE_Z 0.55       // 核球深度弥散 σ（世界单位）
+
+// ---- 核心补偿：tN ∈ 0..CORE_R 的区域内粒子更暗、更小、节拍脉冲更轻 ----
+// ⚠️ 密度 × 单点面积在核心能叠出几十层 alpha，不补偿必然饱和成纯白；
+//    补偿后核心是「暗一些的海 + 少量大亮星」的颗粒感，到 CORE_R 处与外围完全一致。
+//    0.45 是按 RADIAL_POW 1.8 的核心密度定的；降到 1.25 后核心叠层约减半，
+//    暗档同步放宽到 0.58，否则中心会暗得发虚（用户反馈「整体更淡」的一部分）。
+#define GALAXY_CORE_R 0.52
+#define GALAXY_CORE_DIM 0.58
+#define GALAXY_CORE_SHRINK 0.74
+#define GALAXY_CORE_PULSE 0.4
 
 // 三角波往返：0 → 1 → 0（周期 1）。
 // ⚠️ 无缝循环的关键工具：用 fract() 做循环时，1 会**硬跳**回 0（波前从远处瞬移回近处，
@@ -140,6 +176,22 @@ float snoise(vec3 v){
 
 float hash11(float p) {
   return fract(sin(p * 127.1) * 43758.5453123);
+}
+
+// Box-Muller 高斯随机：两路均匀哈希 → 正态分布（比均匀 hash 更像星云的厚度分布）。
+// h1 夹下限避免 log(0)；夹到 0.0001 时返回值上界约 ±4.3，够用且不会炸出离群点。
+float gaussRand(float seed){
+  float h1 = max(hash11(seed), 0.0001);
+  float h2 = hash11(seed + 17.17);
+  return sqrt(-2.0 * log(h1)) * cos(6.2831853 * h2);
+}
+
+// 螺旋星云的臂内弥散：pow(h, RND_POW) 长尾 × 随机正负 × RANDOMNESS * r
+//（对齐参考实现的 rnd()）。长尾意味着绝大多数点贴着臂心、少量甩得远 ——
+// 这是旋臂「像云而不是像线」的唯一来源；确定性偏移会退化成一束平行线。
+float armScatter(float seed, float r){
+  float mag = pow(max(hash11(seed), 0.0), GALAXY_RANDOMNESS_POWER) * GALAXY_RANDOMNESS * r;
+  return mag * mix(-1.0, 1.0, step(0.5, hash11(seed + 7.77)));
 }
 
 vec2 safeCoverUv(vec2 uv) {
@@ -193,14 +245,18 @@ void main(){
   float edgeVal = texture2D(uEdgeTex, safeCoverUv(aUv)).g;
   float maxRippleAmp = 0.0;
   float rippleZ = 0.0;
-  // 螺旋星云的「核球强度」：分支里赋值，分支外的粒子尺寸公式要用它。
+  // 螺旋星云的「星等 / 闪烁」：分支里赋值，分支外的粒子尺寸公式要用它。
   // ⚠️ 必须在这里声明 —— 分支内声明的话，尺寸计算（在分支之外）看不到它。
-  float nebBulge = 0.0;
+  // 初始值取中性：galaxyStar=1（无放大）、galaxyTwinkle=0.5（闪烁因子中点）。
+  float galaxyStar = 1.0;
+  float galaxyTwinkle = 0.5;
+  // 螺旋星云的「核心距离系数」：0=最核心、1=与外围一致（补偿过曝糊芯，同上须分支外声明）
+  float galaxyCore = 1.0;
   // 流星：默认关闭（普通粒子 vMeteor=0，片元里就不走拖尾分支）
   vMeteor = 0.0;
   vMeteorCenter = vec2(0.0);
   vPack1.z = 0.0;   // 拖尾方向角
-  vPack1.w = 0.0;   // 尘埃带强度（只有 SPIRAL 预设会写非零值）
+  vPack1.w = 0.0;   // 保留位（v8 星云的尘埃带已移除；以后要传数据先找这里）
   // >0 时覆盖粒子尺寸（单位：与 gl_PointSize 相同的像素）。
   // 流星要一个「长条」点精灵，尺寸按屏高算，跟粒子的景深/音量尺寸公式无关。
   float sizeOverride = -1.0;
@@ -310,7 +366,9 @@ void main(){
     float d = length(p);
     float angle0 = atan(p.y, p.x);
     float recordR = 2.46;
-    float coverR = 1.18;
+    // 封面半径 1.18 → 1.50（占整盘 61%）：旧值下头像只占盘面 48%、又被黑胶底色
+    // 包围，观感「不够明显」（用户截图确认）。再大会吃掉黑胶纹路区，1.50 是平衡点。
+    float coverR = 1.50;
     float recordAlpha = 1.0 - smoothstep(recordR - 0.02, recordR + 0.05, d);
     float coverMask = 1.0 - smoothstep(coverR - 0.012, coverR + 0.018, d);
     // 同上：底数可负，改用乘法（pow(x,2.0) 等价形式）
@@ -336,8 +394,12 @@ void main(){
         coverColor = mix(coverColor, mix(softPrev, softNew, clamp(uColorMixT, 0.0, 1.0)), hiResGuard * 0.42);
       }
       vColor = mix(defaultColor, coverColor, uHasCover);
-      float coverShade = 1.02 + 0.10 * (1.0 - smoothstep(0.0, coverR, d));
+      // 封面亮度增益 1.02→1.16 / 0.10→0.18：旧值几乎不提亮，封面糊在黑胶里认不出
+      float coverShade = 1.16 + 0.18 * (1.0 - smoothstep(0.0, coverR, d));
       vColor *= coverShade;
+      // 暗封面下限（仅封面区）：全局的 max(vColor, 0.13) 刻意排除了唱片（保黑胶质感），
+      // 但暗色封面会整个沉进黑胶底色 —— 只给封面区一个更低的 0.10 下限保住可辨识度
+      vColor = max(vColor, vec3(0.10));
       vColor = mix(vColor, vec3(1.0), border * 0.54);
       pos.z = 0.040 + border * 0.026 * depthGuard + uBeat * 0.018 * beatGuard;
       maxRippleAmp = max(maxRippleAmp, border * 0.30 + bassDrive * 0.075 * beatGuard + uBeat * 0.075 * beatGuard);
@@ -687,110 +749,97 @@ void main(){
   }
 
   // ====================================================
-  //  Preset 10: SPIRAL — 螺旋星云（v7：对齐参考图「多条细密旋臂 + 锐利星点」）
+  //  Preset 10: SPIRAL — 螺旋星云（v8：对齐新参考实现「2 主旋臂 + 差速自转」）
   //
-  //  参考图特征（用户提供的银河照片）：
-  //    · **多条**细密旋臂（能数出 3~4 条），互相缠绕
-  //    · 臂是**锐利**的亮丝，但整片仍是弥散的云（不是硬描边）
-  //    · 核心白→粉紫，外臂青白，深蓝底，对比强
-  //    · 臂外有暗色尘埃带切过，层次多
-  //
-  //  ⚠️ 与 v6 的关系：v6 是「2 条臂 + 大散射」的弥散云（用户认可「大体样式可以」）。
-  //     v7 保留 v6 的**弥散底子**（角度 SD 仍 ≈ 3.5，不是线），但把臂做**锐**：
-  //
-  //     ⚠️⚠️ 关键是「**散射随半径变化**」这把钥匙：
-  //        · 内侧（核球附近）scatter 小 → 臂细而清晰（参考图中心那几圈是细密的）
-  //        · 外侧 scatter 大 → 臂化开成雾（参考图外缘是弥散的）
-  //     实测「臂内角散 SD」：v6 外缘 0.37~0.40 rad → v7 0.25~0.29 rad（更锐利），
-  //     而整体角度 SD 仍保持 3.2~3.6（确认没有退化成线）。
-  //
-  //     ⚠️ 另一个关键是**臂的条数**：2 条 → 4 条。参考图明显不止两条臂，
-  //        条数多才读得出「缠绕的层次」。实测覆盖率 59.4% → 75.7%。
-  //
-  //  ⚠️ 仍然不要做的事（v5 的教训）：
-  //     不要用高对比掩码去「画」臂的横截面（armCore² 那种）—— 那会变成手绘描边。
-  //     臂的锐利度靠**散射幅度**控制，不靠亮度掩码。
+  //  与新参考实现（三段配色 galaxy generator）的对应关系：
+  //    · 半径幂次分布 pow(u, 1.8) → 向核心聚集，中心自然出现密集亮核
+  //    · 2 条主旋臂 + 线性缠绕（r * 1.4）
+  //    · 臂内弥散 pow(h, 3.2) 长尾 → 星云厚度；法向压 0.4 → 薄盘
+  //    · 差速自转（内快外慢）→「活」的星系
+  //    · 三段配色：粉白核心 → 亮青中段 → 深蓝外缘（#ffd6f5 / #5fd9ff / #2244cc）
+  //    · 星等两极分化 pow(h,3)（少量大亮星 + 大量小星）+ 闪烁 + 节拍脉冲撑大粒子
+  //  v8.1 核心防糊（用户截图：中心叠成一整块粉白「棉花」）：
+  //    · 核心区 3D 高斯弥散成核球（GALAXY_BULGE_*），把堆积的粒子在面内与深度上摊开
+  //    · 核心区粒子更暗/更小/节拍脉冲更轻（galaxyCore → GALAXY_CORE_*），
+  //      大亮星不参与补偿 —— 核心是「暗一些的海 + 颗粒感亮星」，不再是过曝色块
+  //  与参考实现的刻意差异（为什么不能照抄 Demo）：
+  //    · 粒子来自全局 118 网格（切预设不重建几何），随机量全部由 aRand 哈希现场生成；
+  //      网格只有约 1.4 万粒子（参考实现 18 万），靠更高的单点亮度/尺寸补密度
+  //    · 后期泛光由既有泛光层承担，不引入 EffectComposer；相机动感走既有相机系统
+  //    · 差速系数降为 0.08 + 0.05 整体自转，且相位从切入预设起算（见 GALAXY_* 注释）
   // ====================================================
   else {
-    // ---- 半径分布：必须「中心密」 ----
-    // ⚠️ 别用 sqrt(aUv.x)（那是「面积均匀」的正确分布）—— 星云的面亮度是从中心向外
-    //    衰减的，面积均匀会得到一个**中空的甜甜圈**。用 pow 让点向中心聚集。
-    // ❗注意注释里别写「带不配对括号的示例」：本文件的括号平衡由静态核查脚本和单测
-    //    按**逐字符**统计（不剥注释），注释里多出一个圆括号就会被误报成编译级错误。
-    // 这里 clamp 一次底数：aUv.x 是 UV（正常 ∈ 0..1），但若被异常数据污染成负数，
-    //    pow 会返回 NaN 并让整片星云消失 —— clamp 掉既消除告警也让行为确定。
-    float rr = pow(clamp(aUv.x, 0.0, 1.0), 1.45) * SPIRAL_RMAX + 0.05;
-    float tR = clamp(rr / SPIRAL_RMAX, 0.0, 1.0);   // 归一化半径，后面反复用
+    // ---- 半径分布：向核心聚集 ----
+    // ❗clamp 底数：aUv.x 若被异常数据污染成负数，pow 会返回 NaN 让整片星云消失。
+    float rr = pow(clamp(aUv.x, 0.0, 1.0), GALAXY_RADIAL_POW) * SPIRAL_RMAX + 0.05;
+    float tN = clamp(rr / SPIRAL_RMAX, 0.0, 1.0);
 
-    // ---- 臂心：**多条**臂（参考图能数出 3~4 条）----
-    // ⚠️ 条数写在 SPIRAL_ARMS 里，臂偏移均分 2π；一条臂一个增量，点不会跨臂。
-    float armPick = floor(hash11(aRand * 313.0) * SPIRAL_ARMS);
-    float armOffset = (armPick / SPIRAL_ARMS) * 2.0 * PI;
+    // ---- 2 条主旋臂 + 线性缠绕 ----
+    float armPick = floor(hash11(aRand * 313.0) * GALAXY_BRANCHES);
+    float armOffset = (armPick / GALAXY_BRANCHES) * 2.0 * PI;
+    float ang = armOffset + rr * GALAXY_SPIN;
 
-    // ---- ① 弥散底子：每颗粒子独立的角度散射（v1/v6 的成功要素，不能删）----
-    // ⚠️⚠️ 这一项是「像云而不是像线」的唯一来源。
-    //    但 v7 让它**随半径变化**：内小外大 → 内侧臂锐利、外缘化开成雾。
-    //    这就是参考图「中心细密、外缘弥漫」的观感来源。
-    float sBase = SPIRAL_SCATTER_MIN + SPIRAL_SCATTER_GROW * tR * tR;
-    float scatter = (hash11(aRand * 511.0) - 0.5) * sBase;
+    // ---- 臂内弥散（星云厚度的唯一来源）：面内两个方向独立采样，法向压薄 ----
+    float scX = armScatter(aRand * 57.7 + 1.1, rr);
+    float scZ = armScatter(aRand * 77.9 + 3.3, rr);
+    float scY = armScatter(aRand * 97.1 + 5.5, rr) * GALAXY_THICKNESS;
 
-    // ---- ② 对数螺线：θ = k·ln(r) + 臂偏移 + 散射 ----
-    // 系数 2.6 比 v6 的 2.4 略大 —— 臂条数变多后，需要略大的缠绕才看得出层次，
-    // 但仍远低于会把臂甩出取景框的量级。
-    float ang = 2.6 * log(max(rr, 0.12)) + armOffset + scatter + t * 0.075;
+    // 盘面内坐标（未压扁）。差速自转作用在**含弥散**的坐标上 —— 弥散跟着盘一起转，
+    // 对齐参考实现「先烘焙随机、再在顶点里旋转」的次序。
+    vec2 diskP = vec2(cos(ang) * rr + scX, sin(ang) * rr + scZ);
+    // ⚠️ 半径夹下限：r→0 时角速度 →∞，核心几颗粒子会每帧乱跳成雪花。
+    //    0.45 对应最内层约 78 秒一圈，差速层次保留、频闪消失。
+    float dSafe = max(length(diskP), 0.45);
+    float dAng = uGalaxyAge * uSpeed * (GALAXY_BASE_SPIN + GALAXY_DIFF_SPEED / dSafe);
+    float ca = cos(dAng);
+    float sa = sin(dAng);
+    diskP = mat2(ca, -sa, sa, ca) * diskP;
 
-    // ---- 盘面起伏（薄盘）+ 核球在 z 上鼓起 ----
-    float bulge = exp(-rr * rr * 0.14) * 0.95;
-    nebBulge = bulge;                                       // 传给分支外的尺寸公式
+    // ---- 小高斯抖动：不随盘旋转的「呼吸」微粒感；x 分量兼任闪烁相位 ----
+    float jitX = gaussRand(aRand * 11.1 + 9.9) * 0.08;
+    float jitY = gaussRand(aRand * 22.2 + 4.4) * 0.05;
+    float jitZ = gaussRand(aRand * 33.3 + 6.6) * 0.08;
 
-    // ⚠️ v7：核球用**紧致的高斯核**（0.95 → 1.35 + 半径 0.34）。
-    //    参考图的核心是一个又小又极亮的白点，不是一大团亮雾。
-    //    但 vAlpha 用的 bulge 仍要保留一定宽度，否则中心会变成一个「针尖」。
-    float core = exp(-rr * rr * 1.35);
-    float diskZ = snoise(vec3(cos(ang) * rr * 0.7, sin(ang) * rr * 0.7, t * 0.12)) * 0.30;
+    pos = vec3(
+      diskP.x + jitX,
+      diskP.y * GALAXY_FLATTEN + jitY * GALAXY_FLATTEN,
+      scY + jitZ - 1.6
+    );
 
-    pos.x = cos(ang) * rr;
-    // 盘面压扁 0.42：侧视角度下让星云读成「盘」而不是「球」
-    pos.y = sin(ang) * rr * 0.42 + diskZ * 0.32;
-    pos.z = diskZ + bulge * 0.45 + (1.0 - bulge) * 0.30 - 1.6;
+    // ---- 核球：中心区 3D 高斯展开（防过曝糊芯 + 立体厚度，见 GALAXY_BULGE_* 注释）----
+    float bulge = exp(-rr * rr * GALAXY_BULGE_TIGHT);
+    pos += vec3(
+      gaussRand(aRand * 44.4 + 8.8) * GALAXY_BULGE_XY,
+      gaussRand(aRand * 55.5 + 2.2) * GALAXY_BULGE_XY,
+      gaussRand(aRand * 66.6 + 3.3) * GALAXY_BULGE_Z
+    ) * bulge;
 
-    // ---- 配色：核心白 → 粉紫 → 青白 → 外缘蓝（对齐参考图的冷色系）----
-    // ⚠️ v7 调整：参考图的核心是**白偏粉**（不是 v6 的暖黄），
-    //    中段是**粉紫**亮环，外臂是青白，最外转深蓝。整体比 v6 更冷、对比更强。
-    vec3 coreCol  = vec3(1.00, 0.96, 0.92);   // 中心近白（略带暖）
-    vec3 innerCol = vec3(0.94, 0.62, 0.99);   // 内环粉紫（参考图最醒目的那圈）
-    vec3 midCol   = vec3(0.55, 0.86, 1.00);   // 中段青白
-    vec3 edgeCol  = vec3(0.36, 0.46, 0.98);   // 外缘蓝
-    vec3 spCol;
-    if (tR < 0.22) {
-      spCol = mix(coreCol, innerCol, tR / 0.22);
-    } else if (tR < 0.55) {
-      spCol = mix(innerCol, midCol, (tR - 0.22) / 0.33);
-    } else {
-      spCol = mix(midCol, edgeCol, (tR - 0.55) / 0.45);
-    }
-    // ⚠️ 与封面的混合比例 0.26 → 0.12：这是**星云**预设，参考图的色调是主角；
-    //    混太多封面会把冷色系冲淡成灰。仍留一点以保留「跟随封面」的关联感。
-    // 亮度：核球附近额外抬一档（参考图核心是过曝的白），外缘压暗。
-    float lumCore = 1.0 + core * SPIRAL_CORE_BOOST;
+    // ---- 三段配色：核心粉白 → 中段亮青 → 外缘深蓝 ----
+    vec3 coreCol = vec3(1.00, 0.84, 0.96);   // #ffd6f5
+    vec3 midCol  = vec3(0.37, 0.85, 1.00);   // #5fd9ff
+    vec3 edgeCol = vec3(0.13, 0.27, 0.80);   // #2244cc
+    vec3 spCol = (tN < 0.35)
+      ? mix(coreCol, midCol, tN / 0.35)
+      : mix(midCol, edgeCol, (tN - 0.35) / 0.65);
+    // 色板是主角，仍留 0.12 的封面混色保住「跟随封面」的关联感（沿用 v7 的比例）
+    vColor = mix(spCol, coverColor, 0.12);
 
-    // ---- 星尘亮度尖峰：参考图有大量**明亮锐利的星点** ----
-    // 取一小部分粒子（约 5%）给一个高亮度尖峰，模拟参考图里那些「撒盐」般的亮星。
-    // ⚠️ 用 step 挑出少数粒子而不是整体提亮 —— 整体提亮会让星云糊成一片白。
-    float star = step(0.95, hash11(aRand * 731.0));
-    lumCore += star * 1.5;
-    vColor = mix(spCol, coverColor, 0.12) * (0.80 + lumCore * 0.34 + uMid * 0.14);
+    // ---- 星等两极分化 + 闪烁（相位来自高斯抖动的 x 分量，逐粒不同）----
+    // pow(h,3) 长尾：绝大多数粒子是 0.3~0.7 的小星，少数长成 1.5~2.3 的大亮星。
+    galaxyStar = pow(clamp(hash11(aRand * 731.0), 0.0, 1.0), 3.0) * 2.0 + 0.3;
+    galaxyTwinkle = 0.5 + 0.5 * sin(t * 2.0 + jitX * 100.0);
+    // 核心补偿系数（0=最核心，1=与外围一致）：密度×点面积在核心能叠出几十层 alpha，
+    // 不补偿必然饱和成一块纯白；大亮星的加成不乘它 —— 核心才留得住颗粒感。
+    galaxyCore = smoothstep(0.03, GALAXY_CORE_R, tN);
 
-    // ---- 臂的密度调制（v5 翻车处，保持克制）----
-    // ⚠️ 权重只能给 0.1 量级。星云的臂是靠**点的疏密**读出来的，
-    //    不是靠一条高对比的亮带画出来的。这里只让臂上密一点、臂间稀一点。
-    float armMask = 0.55 + 0.45 * cos(scatter * 9.0);
-
-    // 核球实、臂上中等、臂间空旷处压暗（散斑给出星尘的颗粒感）。
-    vAlpha = (0.075 + bulge * 0.62 + core * SPIRAL_CORE_ALPHA + (1.0 - tR) * 0.13
-              + armMask * SPIRAL_ARM_ALPHA + uMid * 0.09)
-           * (1.0 - smoothstep(0.94, 1.0, aUv.x));   // 外缘淡出，不留硬边
-    maxRippleAmp = max(maxRippleAmp, bulge * 0.50 + uBass * 0.16 + uTreble * 0.12);
+    // 外缘淡出藏住盘边界（沿用 v7 的收边窗口）。
+    // ⚠️ 基础 0.80 是「亮度再平衡」的结果：RADIAL_POW 1.8 → 1.25 把同样的粒子
+    //    摊到更大的盘面积上，固定半径处的叠层数中段约降 36%、核心约降 48%，
+    //    不抬单粒子的发射强度，整个星系会明显发淡（用户反馈「更淡了」）。
+    vAlpha = (0.80 * mix(GALAXY_CORE_DIM, 1.0, galaxyCore) + (galaxyStar - 0.3) * 0.10)
+           * (1.0 - smoothstep(0.94, 1.0, aUv.x));
+    // 音频与闪烁走 maxRippleAmp（中频抬臂亮度 —— 音频重映射已把本预设偏向 mid）
+    maxRippleAmp = max(maxRippleAmp, uMid * 0.14 + uBass * 0.10 + galaxyTwinkle * 0.10 + (galaxyStar - 0.3) * 0.06);
   }
 
   // ====================================================
@@ -836,9 +885,10 @@ void main(){
       vBright = 0.86 + maxRippleAmp * 0.42 + uBass * 0.045 + uEnergy * 0.030;
     } else if (uPreset > 9.5) {
       // 螺旋星云（v6）：核球亮、外缘暗，靠点的疏密与 vAlpha 表达，亮度增益保持克制。
-      // ⚠️ 回到 v1 的公式（0.50 的 maxRippleAmp 权重）—— v5 曾用 0.46 + 显式臂脊加成，
+      // ⚠️ 回到 v1 的公式（0.50 的 maxRippleAamp 权重）—— v5 曾用 0.46 + 显式臂脊加成，
       //    那会把旋臂推成一条高对比亮带，正是「像手绘描边」的成因之一。
-      vBright = 0.90 + maxRippleAmp * 0.50 + uBass * 0.040 + uEnergy * 0.035;
+      //    基准 0.90 → 1.02：RADIAL_POW 压平后叠层密度整体下降，同步补偿（见 vAlpha 注释）。
+      vBright = 1.02 + maxRippleAmp * 0.50 + uBass * 0.040 + uEnergy * 0.035;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -858,13 +908,15 @@ void main(){
     float auroraDrive = maxRippleAmp * 0.28 + uBass * 0.10 + uMid * 0.06 + uBeat * 0.10;
     sz = clamp(depthSize * 0.62 * (1.0 + auroraDrive), 0.72, 2.60);
   } else if (uPreset > 9.5) {
-    // 螺旋星云（SPIRAL v7）：参考图是「大量**锐利小星点** + 细密旋臂」。
-    // ⚠️ 点必须**小**才锐利 —— 点一大就糊成一片绒球，参考图那种「撒盐般的亮星」就没了。
-    //    v6 的基准 0.50 / 上限 3.60 是按「弥散云」定的，偏大。
-    //    现在：基准 0.34、上限 2.20，并且**核球不再显著放大**（靠亮度而非尺寸读核心）。
-    //    核球只留一点点尺寸加成（0.10），避免中心变成一坨大点。
-    float nebDrive = nebBulge * 0.20 + uBass * 0.05 + uMid * 0.04;
-    sz = clamp(depthSize * (0.34 + nebBulge * 0.10) * (1.0 + nebDrive), 0.42, 2.20);
+    // 螺旋星云（SPIRAL v8）：星等两极分化（pow(h,3) 长尾：少量大亮星 + 大量小星）
+    // × 闪烁 × 节拍脉冲撑大 —— 对齐参考实现的 pulseScale = 1 + uPulse * 0.6。
+    // 上限放宽到 6.0：大亮星就该大，柔光球的 pow8 衰减保证它不会糊成一团。
+    // ⚠️ 核心区两点特殊处理（galaxyCore：0=最核心，1=与外围一致）：
+    //    尺寸乘 CORE_SHRINK 减少叠加层数；脉冲权重压到 CORE_PULSE，
+    //    否则每次鼓点整块核心一起撑大、闪成一团白。
+    float galaxyDrive = (0.80 + galaxyTwinkle * 0.5)
+                      * (1.0 + uBeat * 0.6 * mix(GALAXY_CORE_PULSE, 1.0, galaxyCore));
+    sz = clamp(depthSize * galaxyStar * galaxyDrive * mix(GALAXY_CORE_SHRINK, 1.0, galaxyCore), 0.35, 6.00);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。
@@ -900,7 +952,7 @@ uniform sampler2D uDotTex;
 uniform float uAlpha, uPreset, uMeteorSize;
 varying vec3 vColor;
 varying vec4 vPack0;   // .x=vBright .y=vRipple .z=vEdgeBoost .w=vAlpha
-varying vec4 vPack1;   // .x=vSourceLum .y=vMeteor .z=拖尾方向角 .w=尘埃带强度(仅星云)
+varying vec4 vPack1;   // .x=vSourceLum .y=vMeteor .z=拖尾方向角 .w=保留位
 varying vec2 vMeteorCenter;
 #define vBright    vPack0.x
 #define vRipple    vPack0.y
@@ -908,7 +960,6 @@ varying vec2 vMeteorCenter;
 #define vAlpha     vPack0.w
 #define vSourceLum vPack1.x
 #define vMeteor    vPack1.y
-#define vDustLane  vPack1.w
 
 void main(){
   // ====================================================
@@ -991,25 +1042,37 @@ void main(){
     return;
   }
 
-  vec4 tex = texture2D(uDotTex, gl_PointCoord);
-  if (tex.a < 0.02) discard;
   vec3 col = vColor * vBright;
-  col = mix(col, col * 1.3 + vec3(0.05), vEdgeBoost * 0.35);
-  col = mix(col, col * 1.2, vRipple * 0.4);
-  float keepBlack = 1.0 - smoothstep(0.025, 0.115, vSourceLum);
-  float nonBlack = 1.0 - keepBlack;
-  float dotDist = length(gl_PointCoord - vec2(0.5)) * 2.0;
-  float readableRim = smoothstep(0.44, 0.94, dotDist) * (1.0 - smoothstep(0.94, 1.08, dotDist)) * tex.a;
-  float outLum = dot(col, vec3(0.299, 0.587, 0.114));
-  float lightParticle = smoothstep(0.50, 0.82, outLum) * nonBlack;
-  float darkParticle = (1.0 - smoothstep(0.20, 0.50, outLum)) * nonBlack;
-  col = mix(col, vec3(0.0), readableRim * lightParticle * 0.38);
-  col = mix(col, vec3(1.0), readableRim * darkParticle * 0.20);
-  // 星云尘埃带：把粒子本身再压暗一档并轻微偏冷，读成「遮挡在发光气体前面的尘埃」。
-  // vDustLane 只在 SPIRAL 预设里非零，其它预设该通道为 0 → 这里是恒等变换，无副作用。
-  col = mix(col, col * vec3(0.34, 0.30, 0.42), vDustLane);
+  float spriteAlpha;
+  if (uPreset > 9.5) {
+    // 螺旋星云：中心亮、边缘快速衰减的柔光球（对齐参考实现 pow(strength, 8.0)）。
+    // 不采样圆点纹理、不做可读性描边 —— 星点是「锐利的光球」，描边会让它变成圆环。
+    float d = distance(gl_PointCoord, vec2(0.5));
+    spriteAlpha = pow(max(0.0, 1.0 - d), 8.0);
+    if (spriteAlpha < 0.004) discard;
+    col = mix(col, col * 1.2, vRipple * 0.4);
+  } else {
+    vec4 tex = texture2D(uDotTex, gl_PointCoord);
+    if (tex.a < 0.02) discard;
+    spriteAlpha = tex.a;
+    col = mix(col, col * 1.3 + vec3(0.05), vEdgeBoost * 0.35);
+    col = mix(col, col * 1.2, vRipple * 0.4);
+    float keepBlack = 1.0 - smoothstep(0.025, 0.115, vSourceLum);
+    float nonBlack = 1.0 - keepBlack;
+    float dotDist = length(gl_PointCoord - vec2(0.5)) * 2.0;
+    float readableRim = smoothstep(0.44, 0.94, dotDist) * (1.0 - smoothstep(0.94, 1.08, dotDist)) * tex.a;
+    // 唱片封面要读成「照片」而不是「描了边的粒子」：可读性描边在唱片预设下收到 30%
+    //（描边给亮粒子压黑边、暗粒子描白边，叠加在封面上等于给照片做半调网点，越描越糊）
+    float rimKeep = (uPreset > 3.5 && uPreset < 4.5) ? 0.30 : 1.0;
+    readableRim *= rimKeep;
+    float outLum = dot(col, vec3(0.299, 0.587, 0.114));
+    float lightParticle = smoothstep(0.50, 0.82, outLum) * nonBlack;
+    float darkParticle = (1.0 - smoothstep(0.20, 0.50, outLum)) * nonBlack;
+    col = mix(col, vec3(0.0), readableRim * lightParticle * 0.38);
+    col = mix(col, vec3(1.0), readableRim * darkParticle * 0.20);
+  }
   col = clamp(col, vec3(0.0), vec3(1.6));
-  gl_FragColor = vec4(col, tex.a * uAlpha * vAlpha);
+  gl_FragColor = vec4(col, spriteAlpha * uAlpha * vAlpha);
 }
 `;
 
@@ -1058,9 +1121,17 @@ varying vec4 vPack1;
 #define vMeteor    vPack1.y
 
 void main(){
-  vec4 tex = texture2D(uDotTex, gl_PointCoord);
-  if (tex.a < 0.01) discard;
-  float soft = tex.a * tex.a;
+  float soft;
+  if (uPreset > 9.5) {
+    // 螺旋星云：柔光球衰减（与主层同形），泛光层只负责把光晕放大铺开
+    float d = distance(gl_PointCoord, vec2(0.5));
+    soft = pow(max(0.0, 1.0 - d), 8.0);
+    if (soft < 0.004) discard;
+  } else {
+    vec4 tex = texture2D(uDotTex, gl_PointCoord);
+    if (tex.a < 0.01) discard;
+    soft = tex.a * tex.a;
+  }
   vec3 col = vColor * (0.55 + vBright * 0.62);
   col = mix(col, col + vec3(0.22, 0.18, 0.10), vEdgeBoost * 0.35);
   col = clamp(col, vec3(0.0), vec3(1.8));

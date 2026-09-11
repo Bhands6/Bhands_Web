@@ -129,10 +129,12 @@ describe('极光流星', () => {
 
   it('拖尾用窗口坐标计算，不用有 y 轴方向歧义的 gl_PointCoord', () => {
     expect(FRAGMENT_SHADER).toContain('gl_FragCoord.xy - vMeteorCenter');
-    // 流星分支里不得出现 gl_PointCoord（那个分支只允许走窗口坐标）
+    // 流星分支里不得出现 gl_PointCoord（那个分支只允许走窗口坐标）。
+    // ⚠️ 终点锚是流星分支之后的第一条主路径语句：星云分支（合法使用 gl_PointCoord）
+    //    也排在圆点纹理采样之前，不能拿 tex 采样行当锚点。
     const branch = FRAGMENT_SHADER.slice(
       FRAGMENT_SHADER.indexOf('if (vMeteor > 0.002)'),
-      FRAGMENT_SHADER.indexOf('vec4 tex = texture2D')
+      FRAGMENT_SHADER.indexOf('vec3 col = vColor * vBright;')
     );
     expect(branch).not.toContain('gl_PointCoord');
   });
@@ -368,39 +370,44 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
    *
    * 星云的面亮度从中心向外衰减；用 sqrt 会得到一个中空的甜甜圈
    * （实测外圈 r 在 4.5~5.4 那段占 33% 的点，而核球只占 3%）。
-   * 正确做法是 pow(aUv.x, >1) 把点往中心压。
+   * 正确做法是 pow(aUv.x, >1) 把点往中心压（v8 用 GALAXY_RADIAL_POW 常量）。
    */
   it('螺旋星云的半径分布必须向中心聚集（不能用 sqrt 的面积均匀分布）', () => {
     const spiral = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 10: SPIRAL'));
     expect(spiral.length, '没截到 SPIRAL 分支').toBeGreaterThan(100);
-    // 底数允许被 clamp() 包一层（防 NaN），幂次与倍率仍要能取到
-    const m = spiral.match(/float rr = pow\(clamp\(aUv\.x, 0\.0, 1\.0\), ([\d.]+)\) \* SPIRAL_RMAX/);
+    // 底数允许被 clamp() 包一层（防 NaN）；幂次可以是字面量，也可以是 #define 常量
+    const m = spiral.match(/float rr = pow\(clamp\(aUv\.x, 0\.0, 1\.0\), ([A-Za-z_][\w.]*)\) \* SPIRAL_RMAX/);
     expect(m, '未找到半径分布公式').toBeTruthy();
-    expect(Number(m![1]), '半径幂次必须 > 1 才会向中心聚集').toBeGreaterThan(1);
+    const raw = m![1];
+    const power = /^\d/.test(raw)
+      ? Number(raw)
+      : Number(VERTEX_SHADER.match(new RegExp(`#define ${raw} ([\\d.]+)`))?.[1] ?? 0);
+    expect(power, '半径幂次必须 > 1 才会向中心聚集').toBeGreaterThan(1);
     expect(spiral).not.toMatch(/float rr = sqrt\(aUv\.x\)/);
   });
 
   /**
-   * ⚠️ 核球强度必须在**分支之外**可见。
+   * ⚠️ 星等 / 闪烁必须在**分支之外**可见（v8 用 galaxyStar / galaxyTwinkle）。
    *
-   * nebBulge 是 SPIRAL 分支里算出来的，但粒子尺寸公式在分支之外 ——
-   * 若把变量声明写在分支内，尺寸公式就看不到它（GLSL 编译失败或取到垃圾值）。
-   * 所以必须在所有分支之前先声明并初始化为 0。
+   * 两者在 SPIRAL 分支里赋值，但粒子尺寸公式在分支之外 ——
+   * 若把声明写在分支内，尺寸公式就看不到它（GLSL 编译失败或取到垃圾值）。
+   * 所以必须在所有分支之前先声明并初始化为中性值。
    */
-  it('螺旋星云的核球强度必须在分支外声明并初始化', () => {
-    expect(VERTEX_SHADER).toMatch(/float nebBulge = 0\.0;/);
-    const iDecl = VERTEX_SHADER.indexOf('float nebBulge = 0.0;');
-    const iAssign = VERTEX_SHADER.indexOf('nebBulge = bulge;');
-    const iUse = VERTEX_SHADER.indexOf('uPreset > 9.5', iDecl); // 尺寸档里会用到
-    expect(iAssign, 'SPIRAL 分支里必须把 bulge 传给 nebBulge').toBeGreaterThan(iDecl);
-    expect(iUse, '尺寸公式必须读 nebBulge 才能体现核球').toBeGreaterThan(iAssign);
+  it('螺旋星云的星等/闪烁必须在分支外声明并初始化', () => {
+    expect(VERTEX_SHADER).toMatch(/float galaxyStar = 1\.0;/);
+    expect(VERTEX_SHADER).toMatch(/float galaxyTwinkle = 0\.5;/);
+    const iDecl = VERTEX_SHADER.indexOf('float galaxyStar = 1.0;');
+    const iAssign = VERTEX_SHADER.indexOf('galaxyStar = pow(clamp(hash11(');
+    const iUse = VERTEX_SHADER.indexOf('depthSize * galaxyStar', iDecl);
+    expect(iAssign, 'SPIRAL 分支里必须给 galaxyStar 赋值').toBeGreaterThan(iDecl);
+    expect(iUse, '尺寸公式必须读 galaxyStar 才能体现星等分化').toBeGreaterThan(iAssign);
   });
 
   it('两个新预设都有独立的尺寸档与亮度档', () => {
-    // 尺寸：9 要小而均匀（否则脊顶鼓成珠子）；10 也走小点（v7 对齐参考图的锐利小星点，
-    //   基准 0.34，比 9 的 0.52 更小）—— 这里只要求「各自有独立档」，
-    //   具体数值由 v7 那组断言（基准 ≤0.45、上限 ≤2.5）负责。
-    expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,420}?sz = clamp\(depthSize \* \(0\.\d/);
+    // 尺寸：9 要小而均匀（否则脊顶鼓成珠子）；10 走星等分化档（galaxyStar 驱动，
+    //   少量大亮星 + 大量小星）—— 这里只要求「各自有独立档」，
+    //   具体数值由 v8 那组断言（下限 ≥0.3、上限 ≥5.0）负责。
+    expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,700}?sz = clamp\(depthSize \* galaxyStar/);
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
     // 亮度：两者都要有独立档，不能共用 6~8 的通用档
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5 && uPreset < 9\.5/);
@@ -408,7 +415,7 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
   });
 });
 
-describe('螺旋星云 v7（多条细密旋臂 + 锐利星点，对齐参考图）', () => {
+describe('螺旋星云 v8（2 主旋臂 + 差速自转，对齐新参考实现）', () => {
   const spiral = () =>
     VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 10: SPIRAL')).replace(/\/\/.*$/gm, '');
   const num = (re: RegExp, label: string): number => {
@@ -418,173 +425,197 @@ describe('螺旋星云 v7（多条细密旋臂 + 锐利星点，对齐参考图�
   };
 
   /**
-   * ⚠️⚠️ 最关键的一条：**每颗粒子独立的角度散射**（这是「像云而不是像线」的唯一来源）。
-   *
-   * 一旦把它改小、或改成由半径唯一决定，同一半径的点就会收拢到同一条弧线上
-   * → 整片退化成一维曲线（＝线）。v2/v3 就是这么翻车的。
-   *
-   * v7 的形式：散射幅度 = MIN + GROW·(r/RMAX)²，**随半径增大**。
-   *   内侧 scatter 小 → 臂细而清晰；外侧 scatter 大 → 臂化开成雾。
-   *   这就是参考图「中心细密、外缘弥漫」的观感来源。
-   *
-   * ⚠️ MIN 不能小到 0（内侧会退化成一条精确的弧线），也不能大到丢失臂的锐利度。
+   * 新参考实现的核心形态：**2 条主旋臂** + 线性缠绕（spinAngle = r * spin）。
+   * v7 的 4 臂 log 螺线方案已整体替换；条数必须由 GALAXY_BRANCHES 统一控制。
    */
-  it('必须有每颗粒子独立的角度散射，且随半径增大（MIN 小、GROW 大）', () => {
+  it('旋臂必须是 2 条主臂 + 线性缠绕（r * SPIN），由常量统一控制', () => {
+    const branches = num(/#define GALAXY_BRANCHES ([\d.]+)/, 'GALAXY_BRANCHES');
+    expect(branches, '新参考图是 2 条主旋臂 + 分支').toBe(2);
+    const spin = num(/#define GALAXY_SPIN ([\d.]+)/, 'GALAXY_SPIN');
+    expect(spin, '缠绕系数过小看不出螺旋').toBeGreaterThanOrEqual(1.0);
+    expect(spin, '缠绕系数过大会把外缘甩出取景框').toBeLessThanOrEqual(2.0);
     const s = spiral();
-    // 散射必须是 hash 形式 × (MIN + GROW·tR²)
-    expect(s, '散射必须是「hash 随机 × (MIN + GROW·tR²)」的形式').toMatch(
-      /float scatter = \(hash11\(aRand \* [\d.]+\) - 0\.5\) \* sBase;/,
+    expect(s, '臂偏移必须由 GALAXY_BRANCHES 均分 2π').toMatch(
+      /float armOffset = \(armPick \/ GALAXY_BRANCHES\) \* 2\.0 \* PI;/,
     );
-    expect(s, 'sBase 必须由 SPIRAL_SCATTER_MIN + SPIRAL_SCATTER_GROW 组成').toMatch(
-      /float sBase = SPIRAL_SCATTER_MIN \+ SPIRAL_SCATTER_GROW \* tR \* tR;/,
+    expect(s, '臂相必须是线性缠绕（对齐参考实现 spinAngle = r * spin）').toMatch(
+      /float ang = armOffset \+ rr \* GALAXY_SPIN;/,
     );
-    const min = num(/#define SPIRAL_SCATTER_MIN ([\d.]+)/, 'SPIRAL_SCATTER_MIN');
-    const grow = num(/#define SPIRAL_SCATTER_GROW ([\d.]+)/, 'SPIRAL_SCATTER_GROW');
-    expect(min, 'MIN 太小会让内侧臂退化成一条精确弧线').toBeGreaterThanOrEqual(0.03);
-    expect(min, 'MIN 太大内侧臂会糊，丢失「细密」感').toBeLessThanOrEqual(0.25);
-    expect(grow, 'GROW 太小则内外一样弥散（v6 的老问题：臂不锐利）').toBeGreaterThanOrEqual(0.5);
-    // 角度绝不能是「只由半径决定」的确定性函数
-    expect(s, '角度不能写成只由半径决定的 cos/sin（会退化成一条线）').not.toMatch(
-      /float ang = [\d.]+ \* (?:cos|sin)\(/,
-    );
+    // v7 的 log 螺线必须已移除
+    expect(s, 'log 螺线必须已替换为线性缠绕').not.toMatch(/log\(max\(rr/);
   });
 
   /**
-   * ⚠️ 臂必须有**多条**（参考图能数出 3~4 条），且条数由常量统一控制。
-   *
-   * 2 条臂只能是两根对称的带，读不出参考图那种「层层缠绕」的层次。
-   * 实测：2 条 → 盘面覆盖率 59.4%；4 条 → 75.7%，密度图上出现明显的多股细丝。
+   * ⚠️「像云而不是像线」的唯一来源：臂内弥散必须是 **pow 长尾 × 随机正负**。
+   * pow(h, P)（P>1）让绝大多数点贴着臂心、少量甩得远 —— 均匀散布会糊成一片，
+   * 确定性偏移会退化成平行线束。
    */
-  it('臂条数必须 ≥ 3 且由 SPIRAL_ARMS 常量控制（对齐参考图的多臂）', () => {
-    const arms = num(/#define SPIRAL_ARMS ([\d.]+)/, 'SPIRAL_ARMS');
-    expect(arms, '臂条数至少 3 条才读得出参考图的缠绕层次').toBeGreaterThanOrEqual(3);
-    expect(arms, '臂条数过多（>8）每片都太密，反而看不出螺旋').toBeLessThanOrEqual(8);
+  it('臂内弥散必须是 pow 长尾随机（armScatter），法向压薄成盘', () => {
+    const power = num(/#define GALAXY_RANDOMNESS_POWER ([\d.]+)/, 'GALAXY_RANDOMNESS_POWER');
+    expect(power, '长尾幂次必须 >2.5 才能既贴臂又有星云晕').toBeGreaterThanOrEqual(2.5);
+    const rnd = num(/#define GALAXY_RANDOMNESS ([\d.]+)/, 'GALAXY_RANDOMNESS');
+    expect(rnd, '弥散太小镇不住噪声、太大会糊成一片').toBeGreaterThanOrEqual(0.25);
+    expect(rnd).toBeLessThanOrEqual(0.8);
     const s = spiral();
-    expect(s, '臂偏移必须由 SPIRAL_ARMS 均分 2π，不能写死 2 条').toMatch(
-      /float armOffset = \(armPick \/ SPIRAL_ARMS\) \* 2\.0 \* PI;/,
+    expect(s, '弥散必须经由 armScatter 辅助函数（长尾 × 随机正负）').toMatch(/float scX = armScatter\(/);
+    expect(s).toMatch(/float scZ = armScatter\(/);
+    expect(s, '盘面法向必须压薄（GALAXY_THICKNESS）').toMatch(
+      /float scY = armScatter\([^)]+\) \* GALAXY_THICKNESS;/,
     );
-    expect(s, '臂的挑选必须用 SPIRAL_ARMS').toMatch(
-      /float armPick = floor\(hash11\(aRand \* [\d.]+\) \* SPIRAL_ARMS\);/,
-    );
+    // 辅助函数本体：pow 长尾 + 随机正负
+    const helper = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('float armScatter('), VERTEX_SHADER.indexOf('void main'));
+    expect(helper).toMatch(/pow\(max\(hash11\(seed\), 0\.0\), GALAXY_RANDOMNESS_POWER\)/);
+    expect(helper).toMatch(/mix\(-1\.0, 1\.0, step\(0\.5, hash11\(seed \+ [\d.]+\)\)\)/);
   });
 
   /**
-   * ⚠️ 臂的锐利度靠**散射幅度**控制，绝不能靠高对比掩码去「画」。
-   *
-   * v5 用了 armCore² × 大系数 + vAlpha 0.52 的臂脊权重，结果边缘硬得像手绘描边。
+   * ⚠️⚠️ 差速自转是本版的灵魂：内快外慢。必须同时锁住三件事：
+   *  ① 公式 = 整体慢速自转 + 差速项（DIFF / r）；
+   *  ② 半径夹下限（r→0 角速度 →∞，核心频闪成雪花）；
+   *  ③ 相位 uGalaxyAge 从切入预设起算 —— 差速会让旋臂随时间越缠越紧
+   *     （缠绕问题），不归零的话播几分钟后 2 条臂就搅成同心环。
    */
-  it('臂的强度调制必须克制，且 v5 的「画臂」机制必须彻底消失', () => {
+  it('差速自转：内快外慢 + 半径夹下限 + 相位从切入预设起算', () => {
+    const base = num(/#define GALAXY_BASE_SPIN ([\d.]+)/, 'GALAXY_BASE_SPIN');
+    const diff = num(/#define GALAXY_DIFF_SPEED ([\d.]+)/, 'GALAXY_DIFF_SPEED');
+    expect(base, '整体自转兜底动感（参考实现 autoRotate 的等效物）').toBeGreaterThan(0);
+    expect(diff, '差速太小没有「内快外慢」的层次').toBeGreaterThanOrEqual(0.05);
+    expect(diff, '差速太大会在十几秒内把臂搅成同心环（缠绕问题）').toBeLessThanOrEqual(0.15);
     const s = spiral();
-    expect(s, 'armMask 必须保持散斑形式（0.55 + 0.45·cos(scatter·k)）').toMatch(
-      /float armMask = 0\.\d+ \+ 0\.\d+ \* cos\(scatter \* [\d.]+\);/,
+    expect(s, '差速必须作用在含弥散的盘面坐标上，且相位用 uGalaxyAge').toMatch(
+      /float dAng = uGalaxyAge \* uSpeed \* \(GALAXY_BASE_SPIN \+ GALAXY_DIFF_SPEED \/ dSafe\);/,
     );
-    const armW = num(/#define SPIRAL_ARM_ALPHA ([\d.]+)/, 'SPIRAL_ARM_ALPHA');
-    expect(armW, '臂密度权重 >0.3 会让臂变成「描边的硬线条」而不是云').toBeLessThanOrEqual(0.3);
-    expect(armW, '臂密度权重必须有实际作用（不能是 0）').toBeGreaterThan(0.02);
-    // v5 的机制必须彻底消失
-    expect(s, 'v5 的 armCore 高对比横截面必须已移除').not.toMatch(/armCore/);
-    expect(s, 'v5 的径向厚度 dR 必须已移除').not.toMatch(/float dR = /);
-    expect(s, 'v5 的 sqrt 臂相必须已移除（会把臂甩出取景框）').not.toMatch(
-      /float armPhase = 2\.0 \* \(sqrt\(rArm\)/,
+    const m = s.match(/float dSafe = max\(length\(diskP\), ([\d.]+)\);/);
+    expect(m, '半径必须夹下限，否则核心频闪').toBeTruthy();
+    expect(Number(m![1]), '下限太小仍会频闪').toBeGreaterThanOrEqual(0.3);
+  });
+
+  /** 高斯厚度：参考实现用 Box-Muller 生成星云的「呼吸」微粒感，这里等价移植。 */
+  it('高斯抖动（Box-Muller）必须存在并用于微粒呼吸感', () => {
+    const helper = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('float gaussRand('), VERTEX_SHADER.indexOf('void main'));
+    expect(helper, '必须是 Box-Muller（sqrt(-2 ln u) cos 2πv）').toMatch(
+      /sqrt\(-2\.0 \* log\(h1\)\) \* cos\(/,
     );
+    const s = spiral();
+    expect(s).toMatch(/float jitX = gaussRand\(/);
+    expect(s).toMatch(/float jitY = gaussRand\(/);
+    expect(s).toMatch(/float jitZ = gaussRand\(/);
+  });
+
+  /** 三段配色是参考图的辨识度来源：粉白核心 → 亮青中段 → 深蓝外缘。 */
+  it('配色必须是三段渐变（粉白核心 / 亮青中段 / 深蓝外缘）', () => {
+    const s = spiral();
+    expect(s).toMatch(/vec3 coreCol = vec3\(1\.00, 0\.84, 0\.96\);/);   // #ffd6f5
+    expect(s).toMatch(/vec3 midCol\s+= vec3\(0\.37, 0\.85, 1\.00\);/);  // #5fd9ff
+    expect(s).toMatch(/vec3 edgeCol = vec3\(0\.13, 0\.27, 0\.80\);/);   // #2244cc
+    expect(s, '分段点 0.35：核心段略短、更亮').toMatch(/tN < 0\.35/);
+    // 封面混色必须保持小权重（色板是主角）
+    const m = s.match(/vColor = mix\(spCol, coverColor, ([\d.]+)\)/);
+    expect(m, '必须有少量封面混色（保留跟随封面的关联感）').toBeTruthy();
+    expect(Number(m![1]), '封面混色过大会把三段配色冲成灰').toBeLessThanOrEqual(0.2);
   });
 
   /**
-   * ⚠️ 臂相必须用 **log 螺线**（等角螺线），不能用 sqrt/幂次。
-   *
-   * log 螺线的「等角」性质让所有臂在全盘保持相似形状，且圈数温和，
-   * 不会像 sqrt 配方那样在大半径处把臂甩出画面。
+   * 参考实现用 scales[i] = pow(rand,3)*2+0.3 做出「少量大亮星 + 大量小星」的
+   * 星等两极分化，配合闪烁与节拍脉冲（pulseScale = 1 + uPulse * 0.6）。
    */
-  it('臂相必须是 log 螺线（等角螺线），系数在 2~3.5 之间', () => {
+  it('星等两极分化 + 闪烁 + 节拍脉冲必须齐备', () => {
     const s = spiral();
-    const m = s.match(/float ang = ([\d.]+) \* log\(max\(rr, [\d.]+\)\) \+ armOffset \+ scatter/);
-    if (!m) throw new Error('未找到 log 螺线形式的臂相');
-    const k = Number(m[1]);
-    expect(k, 'log 系数过小 → 几乎不旋（看不出螺旋）').toBeGreaterThanOrEqual(2.0);
-    expect(k, 'log 系数过大 → 臂会绕太紧/甩出取景框').toBeLessThanOrEqual(3.5);
+    expect(s, '星等必须是 pow(h,3) 长尾（少量大亮星 + 大量小星）').toMatch(
+      /galaxyStar = pow\(clamp\(hash11\(aRand \* [\d.]+\), 0\.0, 1\.0\), 3\.0\) \* 2\.0 \+ 0\.3;/,
+    );
+    expect(s, '闪烁必须逐粒相位不同（相位来自高斯抖动）').toMatch(
+      /galaxyTwinkle = 0\.5 \+ 0\.5 \* sin\(t \* [\d.]+ \+ jitX \* [\d.]+\);/,
+    );
+    const size = VERTEX_SHADER.match(
+      /uPreset > 9\.5[\s\S]{0,700}?sz = clamp\(depthSize \* galaxyStar \* galaxyDrive \* mix\(GALAXY_CORE_SHRINK, 1\.0, galaxyCore\), ([\d.]+), ([\d.]+)\);/,
+    );
+    expect(size, '尺寸档必须读 galaxyStar × galaxyDrive × 核心尺寸补偿').toBeTruthy();
+    expect(Number(size![1]), '下限太小会闪成噪点').toBeGreaterThanOrEqual(0.3);
+    expect(Number(size![2]), '上限必须容纳大亮星（pow8 衰减保证不糊）').toBeGreaterThanOrEqual(5.0);
+    expect(size![0], '节拍脉冲必须撑大粒子（对齐 pulseScale = 1 + uPulse*0.6）').toMatch(/1\.0 \+ uBeat \* 0\.6/);
+  });
+
+  /**
+   * ⚠️ v8.1 核心防糊：半径分布把大量粒子压进核心，而网格点尺寸远大于参考实现的
+   * 18 万小点 —— 核心不处理会叠成一整块过曝的白斑（用户截图确认）。
+   * 必须同时锁住：① 核球 3D 高斯弥散 ② galaxyCore 亮度/尺寸/脉冲补偿 ③ 补偿在分支外声明。
+   */
+  it('核心必须有核球弥散 + 亮度/尺寸/脉冲补偿（防过曝糊芯）', () => {
+    // ① 补偿系数必须在分支外声明并初始化为 1（与外围一致）
+    expect(VERTEX_SHADER).toMatch(/float galaxyCore = 1\.0;/);
+    const iDecl = VERTEX_SHADER.indexOf('float galaxyCore = 1.0;');
+    const iAssign = VERTEX_SHADER.indexOf('galaxyCore = smoothstep(');
+    expect(iAssign, 'SPIRAL 分支里必须给 galaxyCore 赋值').toBeGreaterThan(iDecl);
+    // ② 核球：exp 高斯包络 + 面内/深度双向弥散
+    const tight = num(/#define GALAXY_BULGE_TIGHT ([\d.]+)/, 'GALAXY_BULGE_TIGHT');
+    expect(tight, '核球太松会连到旋臂、太紧退化成一个点').toBeGreaterThanOrEqual(0.3);
+    expect(tight).toBeLessThanOrEqual(1.2);
+    const s = spiral();
+    expect(s, '核球必须用 exp(-rr*rr*k) 包络').toMatch(/float bulge = exp\(-rr \* rr \* GALAXY_BULGE_TIGHT\)/);
+    expect(s, '核球弥散必须乘回 pos（面内 + 深度）').toMatch(/vec3\(\s*gaussRand\([\s\S]{0,80}?GALAXY_BULGE_XY[\s\S]{0,120}?GALAXY_BULGE_Z[\s\S]{0,40}?\) \* bulge;/);
+    // ③ 亮度补偿：vAlpha 基础项必须乘 galaxyCore 映射出的暗档；大亮星加成不得乘它
+    expect(s, 'vAlpha 基础项必须做核心变暗补偿').toMatch(
+      /vAlpha = \(0\.\d+ \* mix\(GALAXY_CORE_DIM, 1\.0, galaxyCore\) \+ \(galaxyStar - 0\.3\) \* 0\.\d+\)/,
+    );
+    // ④ 尺寸与脉冲补偿在尺寸档里
+    expect(VERTEX_SHADER).toMatch(
+      /uPreset > 9\.5[\s\S]{0,700}?mix\(GALAXY_CORE_PULSE, 1\.0, galaxyCore\)/,
+    );
+    const dim = num(/#define GALAXY_CORE_DIM ([\d.]+)/, 'GALAXY_CORE_DIM');
+    expect(dim, '核心太亮仍会糊、太暗核心会消失').toBeGreaterThanOrEqual(0.25);
+    expect(dim).toBeLessThanOrEqual(0.7);
   });
 
   /**
    * ⚠️ 盘半径由 SPIRAL_RMAX 统一定义，且必须与相机机位配套。
-   *
    * 两者是**一对**（见 ParticleStage 的 spiral 机位），单独改一个会导致
    * 「缩小在中央」或「冲出取景框」。
    */
   it('盘半径必须由 SPIRAL_RMAX 定义，且放大到 6.0 以上', () => {
     const rmax = num(/#define SPIRAL_RMAX ([\d.]+)/, 'SPIRAL_RMAX');
-    expect(rmax, '盘半径必须 ≥ 6.0（v1 是 5.4，用户要求扩大）').toBeGreaterThanOrEqual(6.0);
+    expect(rmax, '盘半径必须 ≥ 6.0（用户要求铺满画面）').toBeGreaterThanOrEqual(6.0);
     const s = spiral();
     expect(s, '半径必须用 SPIRAL_RMAX，不能写死').toMatch(
-      /pow\(clamp\(aUv\.x, 0\.0, 1\.0\), [\d.]+\) \* SPIRAL_RMAX/,
+      /pow\(clamp\(aUv\.x, 0\.0, 1\.0\), GALAXY_RADIAL_POW\) \* SPIRAL_RMAX/,
     );
-    expect(s, '归一化半径 tR 也要用 SPIRAL_RMAX').toMatch(/clamp\(rr \/ SPIRAL_RMAX, 0\.0, 1\.0\)/);
+    expect(s, '归一化半径 tN 也要用 SPIRAL_RMAX').toMatch(/clamp\(rr \/ SPIRAL_RMAX, 0\.0, 1\.0\)/);
   });
 
   /**
-   * ⚠️ 外缘淡出窗口必须收在最后（不能太早），否则放大后外缘被截成硬边圆环。
+   * ⚠️ 外缘淡出窗口必须收在最后（不能太早），否则外缘被截成硬边圆环。
    */
   it('外缘淡出窗口必须贴到最外（smoothstep 起点 ≥ 0.9）', () => {
     const s = spiral();
     const m = s.match(/1\.0 - smoothstep\((0\.[\d]+), 1\.0, aUv\.x\)/);
     if (!m) throw new Error('未找到外缘淡出窗口');
-    expect(Number(m[1]), '淡出起点太早会让放大后的外缘出现硬边圆环').toBeGreaterThanOrEqual(0.9);
+    expect(Number(m[1]), '淡出起点太早会让外缘出现硬边圆环').toBeGreaterThanOrEqual(0.9);
   });
 
   /**
-   * ⚠️ 核球（参考图那个又小又极亮的白点）必须有**独立的紧致核** + 亮度加成。
-   *
-   * 参考图的核心是一个过曝的白点，不是一大团亮雾。
-   * 所以：紧致高斯核 `exp(-rr²·k)`（k 要够大）+ 亮度 BOOST，
-   * 但宽核 bulge 仍要保留（否则中心会变成一个针尖、失去星云的体积感）。
+   * 片元端：螺旋星云不再采样圆点纹理，改用参考实现的柔光球衰减 pow(1-d, 8)，
+   * 主层与泛光层同形；可读性描边只属于圆点路径。
    */
-  it('核球必须有紧致核 + 亮度加成，且宽核 bulge 仍保留', () => {
-    const s = spiral();
-    const mCore = s.match(/float core = exp\(-rr \* rr \* ([\d.]+)\)/);
-    if (!mCore) throw new Error('必须有紧致核 core = exp(-rr*rr*k)');
-    const coreK = Number(mCore[1]);
-    expect(coreK, '紧致核的系数太小 → 核心是一团雾而不是一个亮核').toBeGreaterThanOrEqual(0.9);
-    expect(s, '核球必须保留宽核 bulge（否则中心变针尖）').toMatch(/float bulge = exp\(-rr \* rr \* [\d.]+\)/);
-    const boost = num(/#define SPIRAL_CORE_BOOST ([\d.]+)/, 'SPIRAL_CORE_BOOST');
-    expect(boost, '核球亮度加成太小 → 看不出参考图那个过曝的白核').toBeGreaterThanOrEqual(1.5);
-    // vAlpha 里核球权重仍必须远大于臂
-    const armW = num(/#define SPIRAL_ARM_ALPHA ([\d.]+)/, 'SPIRAL_ARM_ALPHA');
-    const mBulge = s.match(/vAlpha = \([\d.]+ \+ bulge \* ([\d.]+)/);
-    if (!mBulge) throw new Error('vAlpha 里未找到 bulge 权重');
-    const bulgeW = Number(mBulge[1]);
-    expect(bulgeW, '核球权重必须 ≥ 0.5').toBeGreaterThanOrEqual(0.5);
-    expect(bulgeW, '核球权重必须是臂的 3 倍以上').toBeGreaterThan(armW * 3);
-  });
-
-  /**
-   * ⚠️ 参考图有大量**明亮锐利的星点**（像撒盐）。必须有一小部分粒子被挑出来提亮。
-   *
-   * ⚠️ 关键是「只挑少数」（step 阈值 ≥ 0.9），不能整体提亮 ——
-   *    整体提亮会让星云糊成一片白，失去参考图的点状质感。
-   */
-  it('必须有少量粒子的亮度尖峰（模拟参考图的「撒盐」亮星）', () => {
-    const s = spiral();
-    const m = s.match(/float star = step\((0\.\d+), hash11\(aRand \* [\d.]+\)\);/);
-    if (!m) throw new Error('未找到 星点尖峰 star');
-    const thr = Number(m[1]);
-    expect(thr, '阈值太低会挑出太多粒子，整体过亮成一片白').toBeGreaterThanOrEqual(0.88);
-    expect(thr, '阈值太高则亮星太少，看不出参考图的点状质感').toBeLessThanOrEqual(0.98);
-    expect(s, '星点尖峰必须真正加到亮度上').toMatch(/lumCore \+= star \* [\d.]+/);
-  });
-
-  /**
-   * ⚠️ 点尺寸必须**小**才锐利（参考图是锐利小星点，不是绒球）。
-   *
-   * v6 的基准 0.50 / 上限 3.60 是按「弥散云」定的，偏大。
-   */
-  it('螺旋星云的点尺寸档必须明显变小（锐利小点）', () => {
-    const m = VERTEX_SHADER.match(
-      /uPreset > 9\.5[\s\S]{0,420}?sz = clamp\(depthSize \* \((0\.\d+) \+ nebBulge \* ([\d.]+)\) \* \(1\.0 \+ nebDrive\), ([\d.]+), ([\d.]+)\);/,
+  it('片元端必须是柔光球衰减（主层 + 泛光层同形），星云分支不走圆点纹理', () => {
+    for (const [name, fs] of [
+      ['FRAGMENT_SHADER', FRAGMENT_SHADER],
+      ['BLOOM_FRAGMENT_SHADER', BLOOM_FRAGMENT_SHADER]
+    ] as const) {
+      expect(fs, `${name} 缺少星云柔光球分支`).toMatch(
+        /if \(uPreset > 9\.5\) \{[\s\S]*?pow\(max\(0\.0, 1\.0 - d\), 8\.0\)/,
+      );
+    }
+    // 主层的星云分支排在圆点纹理采样之前，且分支内不得采样 uDotTex
+    const spiralFrag = FRAGMENT_SHADER.slice(
+      FRAGMENT_SHADER.indexOf('if (uPreset > 9.5)'),
+      FRAGMENT_SHADER.indexOf('vec4 tex = texture2D')
     );
-    if (!m) throw new Error('未找到螺旋星云的尺寸档');
-    const base = Number(m[1]);
-    const cap = Number(m[4]);
-    expect(base, '点尺寸基准必须 ≤0.45 才锐利（参考图是锐利小星点）').toBeLessThanOrEqual(0.45);
-    expect(cap, '点尺寸上限必须 ≤2.5，否则臂被糊成绒球').toBeLessThanOrEqual(2.5);
+    expect(spiralFrag).not.toContain('uDotTex');
+  });
+
+  /** uGalaxyAge 必须在顶点声明（差速自转的相位源），由 ParticleStage 每帧写入。 */
+  it('差速自转相位 uGalaxyAge 必须在顶点着色器声明', () => {
+    expect(VERTEX_SHADER).toMatch(/uniform float uGalaxyAge;/);
   });
 });
 describe('声波地形的观感修正（居中 / 起伏 / 无缝循环）', () => {
@@ -733,5 +764,56 @@ describe('声波地形的观感修正（居中 / 起伏 / 无缝循环）', () =
     expect(iDef).toBeLessThan(iSonic);
     // 片元着色器不需要它（只有顶点算位置）
     expect(FRAGMENT_SHADER).not.toContain('triWave');
+  });
+});
+
+describe('唱片封面显著度（用户反馈「头像不够明显」）', () => {
+  const vinyl = () => {
+    const s = VERTEX_SHADER.slice(
+      VERTEX_SHADER.indexOf('Preset 4: VINYL'),
+      VERTEX_SHADER.indexOf('Preset 5: WALLPAPER')
+    );
+    expect(s.length, '没截到 VINYL 分支').toBeGreaterThan(100);
+    return s.replace(/\/\/.*$/gm, '');
+  };
+
+  /**
+   * ⚠️ 封面占比：coverR 1.18 时头像只占盘面 48%，被黑胶底色包围观感「不明显」。
+   * 放大到 1.50（61%）是平衡点 —— 再大会吃掉黑胶纹路区，唱片就不像唱片了。
+   */
+  it('封面半径必须 ≥ 1.45 且给黑胶纹路区留出 ≥ 0.7 的径向空间', () => {
+    const s = vinyl();
+    const coverR = Number(s.match(/float coverR = ([\d.]+);/)?.[1] ?? 0);
+    const recordR = Number(s.match(/float recordR = ([\d.]+);/)?.[1] ?? 0);
+    expect(coverR, '封面太小，头像不显眼').toBeGreaterThanOrEqual(1.45);
+    expect(recordR - coverR, '纹路区太窄会失去黑胶质感').toBeGreaterThanOrEqual(0.7);
+  });
+
+  /**
+   * ⚠️ 封面必须比底色亮：全局的 max(vColor, 0.13) 暗部下限**刻意排除了唱片**
+   * （保黑胶质感），所以封面区需要自己的提亮与下限 —— 否则暗封面整个沉进黑胶底色。
+   */
+  it('封面必须有亮度增益与暗部下限（旧值 1.02/无下限，封面糊在黑胶里认不出）', () => {
+    const s = vinyl();
+    const m = s.match(/float coverShade = ([\d.]+) \+ ([\d.]+) \* \(1\.0 - smoothstep/);
+    expect(m, '未找到 coverShade').toBeTruthy();
+    expect(Number(m![1]), '亮度基准太低封面不显眼').toBeGreaterThanOrEqual(1.10);
+    expect(Number(m![2]), '中心增益太小说明没有纵深感').toBeGreaterThanOrEqual(0.12);
+    expect(s, '封面区必须有暗部下限（且低于全局 0.13，别毁掉黑胶对比）').toMatch(
+      /vColor = max\(vColor, vec3\(0\.10\)\);/,
+    );
+  });
+
+  /**
+   * ⚠️ 可读性描边与照片封面冲突：描边给亮粒子压黑边、暗粒子描白边，
+   * 叠在封面上等于给照片做半调网点 —— 封面必须读成「照片」而不是「描边粒子」。
+   */
+  it('片元的可读性描边在唱片预设下必须减弱（rimKeep ≤ 0.5）', () => {
+    const m = FRAGMENT_SHADER.match(
+      /float rimKeep = \(uPreset > 3\.5 && uPreset < 4\.5\) \? (0\.\d+) : 1\.0;/,
+    );
+    expect(m, '未找到 rimKeep（唱片预设的描边衰减）').toBeTruthy();
+    expect(Number(m![1]), '描边衰减不到位，封面仍会被网点化').toBeLessThanOrEqual(0.5);
+    expect(FRAGMENT_SHADER, 'rimKeep 必须真正乘回 readableRim').toMatch(/readableRim \*= rimKeep;/);
   });
 });

@@ -21,7 +21,7 @@ import {
  * Three.js 粒子舞台 —— 完整移植桌面版 main.js 的 shader 粒子系统：
  * - 11 种预设（uPreset shader 分支）：0 丝绸 / 1 滚筒隧道 / 2 星球 / 3 虚空 / 4 唱片 / 5 星河壁纸
  *   ／ 6 极光 / 7 万花筒 / 8 迸发（换歌爆一次，之后常驻：匀速缓慢自转 + 整片上下浮动）
- *   ／ 9 声波地形（随音乐起伏的山脊 + 推进扫描波前）/ 10 螺旋星云（双旋臂 + 中心核球）
+ *   ／ 9 声波地形（随音乐起伏的山脊 + 推进扫描波前）/ 10 螺旋星云（2 主旋臂 + 差速自转 + 节拍脉冲）
  * - 封面纹理采样取色（新旧封面 crossfade）+ CPU 端 Sobel 边缘纹理（丝绸轮廓增益）
  * - 涟漪系统：bass 上升沿在 3×3 宫格随机触发 DataTexture 涟漪
  * - 音频包络（attack/release）+ 唱片/壁纸预设专用频段重映射
@@ -239,6 +239,7 @@ export default function ParticleStage() {
       uTreble: { value: 0 },
       uBeat: { value: 0 },
       uBurstAge: { value: 0 },
+      uGalaxyAge: { value: 0 },
       uEnergy: { value: 0 },
       uBurstAmt: { value: 0 },
       uVinylSpin: { value: 0 },
@@ -552,6 +553,15 @@ export default function ParticleStage() {
     /** 切歌时置位，由 animate 在下一帧消费（store 订阅回调里拿不到 rAF 的 t） */
     let burstRequested = true;
 
+    /**
+     * 螺旋星云的差速自转相位基准：切入 spiral 预设时置位，由 animate 在下一帧
+     * 记下 uGalaxyAge 的零点（store 订阅回调里拿不到 rAF 的 t，与 burstRequested 同款）。
+     * ⚠️ 差速自转会让旋臂随时间越缠越紧（缠绕问题，见 particleShaders.ts 的
+     * GALAXY_* 注释），相位从切入时刻起算保证每次切进来都从「干净的 2 条臂」开始。
+     */
+    let galaxyAt = 0;
+    let galaxyResetRequested = false;
+
     // 切歌订阅：换封面 + 请求一次迸发（迸发预设每次换歌爆一次）
     checkCover(usePlayerStore.getState().currentTrack?.cover);
     let lastTrackId = usePlayerStore.getState().currentTrack?.id ?? null;
@@ -574,6 +584,8 @@ export default function ParticleStage() {
         Object.assign(orbitTarget, PRESET_CAMERA[s.visual.effect]);
         // 切到迸发效果时立刻爆一次，否则要等下一首歌才看得到
         if (s.visual.effect === 'burst') burstRequested = true;
+        // 切到螺旋星云时差速自转相位归零（见 galaxyAt 注释）
+        if (s.visual.effect === 'spiral') galaxyResetRequested = true;
       }
     });
 
@@ -697,6 +709,12 @@ export default function ParticleStage() {
         burstRequested = false;
       }
       uniforms.uBurstAge.value = t - burstAt;
+      // 螺旋星云：差速自转相位（切入预设时归零；其余预设不读这个 uniform）
+      if (galaxyResetRequested) {
+        galaxyAt = t;
+        galaxyResetRequested = false;
+      }
+      uniforms.uGalaxyAge.value = t - galaxyAt;
       uniforms.uEnergy.value = audioEnergy;
       uniforms.uIntensity.value = visual.intensity;
       // 粒子尺寸：设置值 × 1.3 全局增益（对齐桌面版长期使用调大 point 的观感，面积放大 ~1.7 倍）
