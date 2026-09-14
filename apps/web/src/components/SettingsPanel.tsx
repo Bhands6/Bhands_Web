@@ -480,11 +480,6 @@ export default function SettingsPanel() {
         <div className="fx-fold open">
           <div className="fx-fold-body">
             <div className="fx-section-label">LX Music 音源脚本</div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.45)', marginBottom: 8, lineHeight: 1.5 }}>
-              上传 LX Music 格式的 .js 音源脚本，可解锁更多解析通道。
-              脚本从 GitHub 搜索 <b>lx-music-source</b> 获取。
-              上传/删除需服务器管理令牌（ADMIN_TOKEN），首次操作时会提示输入。
-            </div>
             <LxMusicSection />
           </div>
         </div>
