@@ -40,47 +40,62 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
     // 竞态守卫：切歌是异步的，快速连点会让旧请求后返回并覆盖新歌歌词
     const token = ++lyricsLoadToken;
     set({ loading: true, error: null });
-    
-    try {
-      const response = await musicApi.getLyrics(songId);
-      if (token !== lyricsLoadToken) return; // 已被更新的请求取代，丢弃过期结果
 
-      if (response.success && response.data) {
-        const { lrc, tlyric, klyric } = response.data;
+    // 单次请求 + 解析 + 写入；返回是否拿到歌词（被更新请求取代时返回 true=无需重试）
+    const attemptOnce = async (): Promise<boolean> => {
+      try {
+        const response = await musicApi.getLyrics(songId);
+        if (token !== lyricsLoadToken) return true;
 
-        // 解析歌词：优先 LRC 时间轴；部分歌曲网易云不返回 LRC（lrc 为空）而只有
-        // YRC 逐字歌词（klyric），此时用 YRC 兜底，否则表现为「这首歌没有歌词」。
-        let lyrics = parseLyrics(lrc);
-        const usedYrc = lyrics.length === 0 && !!klyric;
-        if (usedYrc) lyrics = parseYrc(klyric);
-        const hasKaraoke = !!klyric;
+        if (response.success && response.data) {
+          const { lrc, tlyric, klyric } = response.data;
 
-        set({
-          lyrics,
-          loading: false,
-          hasLyrics: lyrics.length > 0,
-          hasKaraoke,
-          timingSource: usedYrc || hasKaraoke ? 'lyric' : (tlyric ? 'ttml' : 'none')
-        });
-        // 歌词晚到（网络慢 / 会话恢复）时播放进度已就位：
-        // 加载完成后立即按当前进度同步行号，否则暂停态下 currentTime 不再变化，行号停在开头
-        if (lyrics.length > 0) {
-          get().setCurrentTime(usePlayerStore.getState().currentTime);
+          // 解析歌词：优先 LRC 时间轴；部分歌曲网易云不返回 LRC（lrc 为空）而只有
+          // YRC 逐字歌词（klyric），此时用 YRC 兜底，否则表现为「这首歌没有歌词」。
+          let lyrics = parseLyrics(lrc);
+          const usedYrc = lyrics.length === 0 && !!klyric;
+          if (usedYrc) lyrics = parseYrc(klyric);
+          const hasKaraoke = !!klyric;
+
+          set({
+            lyrics,
+            loading: false,
+            error: null,
+            hasLyrics: lyrics.length > 0,
+            hasKaraoke,
+            timingSource: usedYrc || hasKaraoke ? 'lyric' : (tlyric ? 'ttml' : 'none')
+          });
+          // 歌词晚到（网络慢 / 会话恢复）时播放进度已就位：
+          // 加载完成后立即按当前进度同步行号，否则暂停态下 currentTime 不再变化，行号停在开头
+          if (lyrics.length > 0) {
+            get().setCurrentTime(usePlayerStore.getState().currentTime);
+          }
+          return lyrics.length > 0;
         }
-      } else {
-        set({ 
-          loading: false, 
+        set({
+          loading: false,
           error: response.message || '获取歌词失败',
           hasLyrics: false
         });
+        return false;
+      } catch (error) {
+        if (token !== lyricsLoadToken) return true;
+        set({
+          loading: false,
+          error: error instanceof Error ? error.message : '获取歌词失败',
+          hasLyrics: false
+        });
+        return false;
       }
-    } catch (error) {
+    };
+
+    const ok = await attemptOnce();
+    // 首次失败或空歌词：NCM 偶发抖动/风控（刚登录并发请求多时概率升高）会让这首歌
+    // 到切歌为止都没有歌词。延迟静默重试一次兜底：token 守卫防竞态，仅一次防循环。
+    if (!ok && token === lyricsLoadToken) {
+      await new Promise((r) => setTimeout(r, 1200));
       if (token !== lyricsLoadToken) return;
-      set({ 
-        loading: false, 
-        error: error instanceof Error ? error.message : '获取歌词失败',
-        hasLyrics: false
-      });
+      await attemptOnce();
     }
   },
   
