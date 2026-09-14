@@ -1,5 +1,9 @@
 <h1 align="center">BhandsMusic Web</h1>
 
+<p align="center">
+  <img src="docs/screenshots/01-landing.jpg" width="720" alt="启动页">
+</p>
+
 沉浸式在线音乐播放器 —— 将 BhandsMusic Electron 桌面应用迁移为 Web 网页版。
 
 🌐 **在线体验**：[https://bhands.icu](https://bhands.icu)
@@ -10,11 +14,6 @@
 
 ## ✨ 界面预览
 
-**启动页**
-
-<p align="center">
-  <img src="docs/screenshots/01-landing.jpg" width="720" alt="启动页">
-</p>
 
 **首页**（未登录 / 已登录）
 
@@ -25,11 +24,7 @@
   <img src="docs/screenshots/03-home-logged-in.jpg" width="720" alt="登录后首页">
 </p>
 
-**播放页 · 照片模式与逐字歌词**
 
-<p align="center">
-  <img src="docs/screenshots/04-player-photo-lyrics.jpg" width="720" alt="播放歌词页">
-</p>
 
 ## 🌌 粒子视觉效果
 
@@ -37,10 +32,10 @@
 
 | | | |
 |:---:|:---:|:---:|
-| ![](docs/screenshots/05-fx-meteor.jpg)<br>**流星** | ![](docs/screenshots/06-fx-universe.jpg)<br>**寰宇** | ![](docs/screenshots/07-fx-vacuum.png)<br>**真空** |
-| ![](docs/screenshots/08-fx-photo.jpg)<br>**照片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**银河** | ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |
-| ![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |
-| ![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** | |
+| ![](docs/screenshots/04-player-photo-lyrics.jpg)<br>**音谱** |![](docs/screenshots/05-fx-meteor.jpg)<br>**流星** | ![](docs/screenshots/06-fx-universe.jpg)<br>**寰宇** | 
+| ![](docs/screenshots/07-fx-vacuum.png)<br>**真空** |![](docs/screenshots/08-fx-photo.jpg)<br>**照片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**银河** | 
+| ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | 
+| ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** |
 
 ## 🎵 功能特性
 
