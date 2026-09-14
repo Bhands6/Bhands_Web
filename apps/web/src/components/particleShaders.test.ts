@@ -378,7 +378,8 @@ describe('水母花（预设 11：半透明花瓣头 + 下垂摆动触须）', (
     expect(num(/#define JELLY_COUNT ([\d.]+)/, 'JELLY_COUNT')).toBeGreaterThanOrEqual(6);
     expect(num(/#define JELLY_COUNT ([\d.]+)/, 'JELLY_COUNT')).toBeLessThanOrEqual(10);
     expect(num(/#define JELLY_TENDRILS ([\d.]+)/, 'JELLY_TENDRILS')).toBeGreaterThanOrEqual(3);
-    expect(num(/#define JELLY_TENDRILS ([\d.]+)/, 'JELLY_TENDRILS')).toBeLessThanOrEqual(7);
+    // v12 上限 7→4.5：腿数 >4 时每条粒子稀到断续成「点串珠」（用户截图否决），连贯性优先于数量
+    expect(num(/#define JELLY_TENDRILS ([\d.]+)/, 'JELLY_TENDRILS')).toBeLessThanOrEqual(4.5);
     expect(num(/#define JELLY_HEAD_SHARE ([\d.]+)/, 'JELLY_HEAD_SHARE')).toBeLessThanOrEqual(0.08);
     expect(num(/#define JELLY_HAZE_SHARE ([\d.]+)/, 'JELLY_HAZE_SHARE')).toBeLessThanOrEqual(0.08);
     expect(num(/#define JELLY_DOME_SHARE ([\d.]+)/, 'JELLY_DOME_SHARE')).toBeGreaterThanOrEqual(0.35);
@@ -415,18 +416,29 @@ describe('水母花（预设 11：半透明花瓣头 + 下垂摆动触须）', (
     );
     // tt 黄金比例分层：随机采样铺成近均匀（珠链 → 连续丝）
     expect(jellyCode).toMatch(/tt = fract\(hash11\(aRand \* 601\.0\) \+ jpid \* 0\.618034\)/);
+    // v12 连续丝：腿点径 ≥0.55（0.45 时点间距 > 点直径，断续成珠链 —— 用户截图否决）。
+    // jellyCode 里 0.xx 档位多处（默认声明 0.45 / 腿 0.58 / 伞盖 0.80），断言「存在腿档区间值」
+    const sizeTags = [...jellyCode.matchAll(/sizeTag = 0\.(\d+);/g)].map((m) => Number('0.' + m[1]));
+    expect(sizeTags.some((v) => v >= 0.55 && v <= 0.65)).toBe(true);
     // 向尖端渐隐：alpha 基式为「常数 − tt×斜率」
     expect(jellyCode).toMatch(/jellyAlpha = \(0\.\d+ - tt \* 0\.\d+\)/);
   });
 
-  it('伞盖必须是高密度半球（v5：cosθ 均匀球面壳 + 内层体积 + 压扁 + 伞缘微收）', () => {
+  it('伞盖必须是高密度半球（v5 cosθ 球面壳 + v11 饱满圆顶 + 伞缘微收）', () => {
     // v4 花瓣的「辐条感」根因是径向参数化 —— v5 换成 acos 均匀球面采样
     expect(jellyCode).toMatch(/theta = acos\(max\(1\.0 - du, 0\.0\)\)/);
     // 内层体积用立方根采样（pow(x, 0.3333)，底数必须 clamp）
     expect(jellyCode).toMatch(/pow\(max\(hash11\(aRand \* 457\.0\), 0\.0\), 0\.3333\)/);
     expect(jellyCode).toMatch(/isInner = step\(0\.82, hash11/);
-    // 压扁成扁球伞盖（收缩时压得更扁）+ 伞缘微收
-    expect(jellyCode).toMatch(/cos\(theta\) \* rr \* \(0\.72 - 0\.20 \* contract\)/);
+    // v11 饱满半球：压扁系数 ≥0.85（旧 0.72 扁球是「蘑菇伞」感根因，用户截图否决）；
+    // 收缩时仍压到 -0.20 配合蹬水节奏
+    const flatten = jellyCode.match(/cos\(theta\) \* rr \* \(0\.(\d+) - 0\.20 \* contract\)/);
+    if (!flatten) throw new Error('未找到伞盖压扁系数');
+    expect(Number('0.' + flatten[1])).toBeGreaterThanOrEqual(0.85);
+    // v11 半径增大：基径 ≥0.95（旧 0.78 偏小）
+    const domeR = jellyCode.match(/domeR = \(0\.(\d+) \+ hash11\(creature \* 83\.0\) \* 0\.(\d+)\)/);
+    if (!domeR) throw new Error('未找到 domeR');
+    expect(Number('0.' + domeR[1])).toBeGreaterThanOrEqual(0.95);
     expect(jellyCode).toMatch(/skirt = 1\.0 - smoothstep\(0\.78, 1\.0, du\)/);
     // 伞面 alpha：顶实缘透（0.24 - du×斜率）
     expect(jellyCode).toMatch(/jellyAlpha = \(0\.24 - du \* 0\.09\)/);

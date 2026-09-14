@@ -112,7 +112,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 
 // ---- 水母花（Preset 11）形态常量：半透明花瓣头 + 下垂摆动触须（对齐用户参考图）----
 #define JELLY_COUNT 10.0       // 同屏花数（10 = 低配设备保护上限：粒子池固定，加花只稀释密度+多 2 个大光晕/朵）
-#define JELLY_TENDRILS 5.0     // 每朵的浮动腿数（v5：几条飘逸的腿，不再是 7 条密须）
+#define JELLY_TENDRILS 4.0     // 每朵的浮动腿数（v12：5→4 —— 每条腿多分 25% 粒子，治「点串珠」断续感）
 #define JELLY_HEAD_SHARE 0.05  // 核心亮斑粒子占比
 #define JELLY_HAZE_SHARE 0.05  // 花头光雾占比（大软点低 alpha，叠出参考图的光晕）
 #define JELLY_DOME_SHARE 0.50  // 半球伞盖粒子占比（v9：8→10 朵后从 0.46 上调，补回伞盖密度；其余 40% 为腿）
@@ -979,14 +979,16 @@ void main(){
       float du = hash11(aRand * 431.0);
       float dphi = hash11(aRand * 437.0) * 6.2831853;
       float isInner = step(0.82, hash11(aRand * 449.0));
-      float domeR = (0.78 + hash11(creature * 83.0) * 0.34) * breath * (1.0 - 0.12 * contract);
+      float domeR = (0.95 + hash11(creature * 83.0) * 0.40) * breath * (1.0 - 0.12 * contract);
       float theta = acos(max(1.0 - du, 0.0));            // [0, π/2]：顶点 → 赤道缘
       float rr = domeR * mix(1.0, pow(max(hash11(aRand * 457.0), 0.0), 0.3333) * 0.96, isInner);
       float skirt = 1.0 - smoothstep(0.78, 1.0, du) * 0.12;   // 伞缘微收（内卷感）
       float sth = sin(theta);
       jp.x += sth * cos(dphi) * rr * skirt;
       jp.z += sth * sin(dphi) * rr * skirt;
-      jp.y += cos(theta) * rr * (0.72 - 0.20 * contract); // 压扁：扁球伞盖（收缩时压得更扁）
+      // v11 饱满半球：压扁系数 0.72→0.90（旧扁球是「蘑菇伞」感根因），对齐参考图圆顶；
+      // 收缩时仍压扁到 0.70 配合蹬水节奏
+      jp.y += cos(theta) * rr * (0.90 - 0.20 * contract);
       // 伞面 alpha：顶实缘透；内层更透（体积感）。Additive 下高密度叠加即「实心发光」
       jellyAlpha = (0.24 - du * 0.09) * mix(1.0, 0.55, isInner) * (1.0 + contract * 0.25);
       // 配色三段（沿用 v4 公式）：顶部白 / 中段淡蓝 / 伞缘淡紫
@@ -1022,7 +1024,8 @@ void main(){
       // 腿 alpha：向尖端渐隐（1-tt），根部略亮接住伞缘
       jellyAlpha = (0.40 - tt * 0.26) * (0.7 + hash11(aRand * 613.0) * 0.3);
       jc = mix(vec3(0.70, 0.83, 1.0), vec3(0.48, 0.64, 0.96), tt * 0.6);
-      sizeTag = 0.45;
+      // v12 点径 +29%（0.45→0.58）：相邻粒子重叠成连续丝，看不出单点串珠
+      sizeTag = 0.58;
       maxRippleAmp = max(maxRippleAmp, uMid * 0.06 + (1.0 - tt) * 0.04);
     }
 
