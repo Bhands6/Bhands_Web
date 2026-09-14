@@ -50,7 +50,9 @@ const PROXY = (url: string) => /^https?:\/\//i.test(url) ? `/api/music/stream?ur
 // ============================================================
 // 策略：GDMusic
 // ============================================================
-const GDMUSIC_TIMEOUT = 12_000;
+// 8s 而非更久：GDMusic 正常命中很快（聚合搜索 1~3s），超时基本等于上游挂了；
+// 无损档它排第一，收得太松会让每首新歌的首次解析都先白等 12s 才降级到 wy
+const GDMUSIC_TIMEOUT = 8_000;
 
 /** 用户档位 → GDMusic(酷音/joox/tidal 聚合) 的 br 参数：999=无损, 320/128=有损 */
 function gdQualityOf(tier?: string): string {

@@ -6,7 +6,7 @@ import { usePlayerStore, readSessionSnapshot, flushSessionSnapshot } from '../st
 import { usePlaylistStore } from '../stores/usePlaylistStore';
 import { useLyricsStore } from '../stores/useLyricsStore';
 import { useHistoryStore } from '../stores/useHistoryStore';
-import { useUIStore } from '../stores/useUIStore';
+import { useUIStore, QUALITY_LABELS, PlayQuality } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
 import { useFavoritesStore } from '../stores/useFavoritesStore';
 import { releaseBlobUrlsExcept } from '../utils/blobUrls';
@@ -26,11 +26,62 @@ export function songItemToTrack(song: SongItem): AudioTrack {
   };
 }
 
+// ============================================================
+// 档位降级判定：档位语义是「优先级」而非「保证」——用户选了无损，
+// GDMusic 失败后会静默回落 wy 的 320k。这里把「实际档位低于请求档位」
+// 的情况用 toast 显式告知（同一组合 5 分钟内只提示一次，避免连播刷屏）。
+// ============================================================
+
+/** 用户可选档位 → 等级（越高越好） */
+const QUALITY_RANK: Record<PlayQuality, number> = { jymaster: 4, hires: 3, lossless: 2, exhigh: 1, standard: 0 };
+
+/** 解析结果的实际档位 → 等级。来源格式不一（见服务端各策略返回值）：
+ *  官方 'netease-<tier>'、LX 脚本 'lx-<128k|320k|flac>'、Unblock 'unblock'；
+ *  GDMusic 返回 'gdmusic-<源>' 不带码率（按请求 br 请求的），视为未知不参与判定。未知一律 -1。 */
+export function qualityRankOf(actual?: string): number {
+  if (!actual) return -1;
+  if (actual.startsWith('netease-')) return QUALITY_RANK[actual.slice(8) as PlayQuality] ?? -1;
+  if (actual === 'lx-flac') return QUALITY_RANK.lossless;
+  if (actual === 'lx-320k') return QUALITY_RANK.exhigh;
+  if (actual === 'lx-128k' || actual === 'unblock') return QUALITY_RANK.standard;
+  return -1;
+}
+
+/** 实际档位 → 提示用人类可读文案 */
+export function actualQualityLabel(actual?: string): string {
+  if (!actual) return '';
+  if (actual.startsWith('netease-')) return QUALITY_LABELS[actual.slice(8) as PlayQuality] || actual.slice(8);
+  if (actual === 'lx-flac') return 'FLAC';
+  if (actual === 'lx-320k') return '320kbps';
+  if (actual === 'lx-128k') return '128kbps';
+  if (actual === 'unblock') return '128kbps（UC 源）';
+  return actual;
+}
+
+const FALLBACK_TOAST_INTERVAL = 5 * 60_000;
+const fallbackToastState = { key: '', at: 0 };
+
+/** 实际档位低于请求档位时 toast 告知（含去重）；trial 场景已有专门提示，不重复打扰 */
+export function maybeToastQualityFallback(
+  showToast: (msg: string) => void,
+  requested: string,
+  actual?: string
+): void {
+  const reqRank = QUALITY_RANK[requested as PlayQuality] ?? -1;
+  const actRank = qualityRankOf(actual);
+  if (reqRank <= 0 || actRank < 0 || actRank >= reqRank) return;
+  const key = `${requested}>${actual}`;
+  const now = Date.now();
+  if (fallbackToastState.key === key && now - fallbackToastState.at < FALLBACK_TOAST_INTERVAL) return;
+  fallbackToastState.key = key;
+  fallbackToastState.at = now;
+  showToast(`「${QUALITY_LABELS[requested as PlayQuality] || requested}」未获取到，已回落 ${actualQualityLabel(actual)}`);
+}
+
 /** 解析播放地址。
  *  ① 用户本地 LX 脚本优先（脚本存于浏览器 localStorage，解析时随请求到服务端一次性沙盒执行，不落服务器存储）；
  *  ② 降级服务端链路：内置音源 + VIP 分流（VIP 先官方后解析，非 VIP 先解析后官方）
- *  fresh=true 绕过服务端成功缓存重新解析，用于播放失败重试（缓存的时效直链可能已过期） */
-async function resolveTrackUrl(id: string, fresh = false): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
+ *  fresh=true 绕过服务端成功缓存重新解析，用于播放失败重试（缓存的时效直链可能已过期） */async function resolveTrackUrl(id: string, fresh = false): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
   const { quality } = useUIStore.getState();
   const local = getActiveLocalLxScript();
   if (local) {
@@ -275,6 +326,7 @@ async function doPlayTrack(
   // 已有可直连地址直接播放，否则（含旧版持久化的平台直链）重新解析
   let url = isDirectPlayableUrl(track.url) ? track.url : '';
   let trial = false;
+  let parsedActual = ''; // 本次解析实际拿到的档位（仅用于降级提示；直链快照不提示）
   usePlayerStore.setState({ playingQuality: track.resolvedQuality || '' });
   if (!url) {
     const resolved = await resolveTrackUrl(track.id);
@@ -285,10 +337,14 @@ async function doPlayTrack(
     }
     url = resolved.url;
     trial = !!resolved.trial;
-    if (resolved.quality) usePlayerStore.setState({ playingQuality: resolved.quality });
+    parsedActual = resolved.quality || '';
+    if (parsedActual) usePlayerStore.setState({ playingQuality: parsedActual });
   }
   if (trial) {
     showToast('当前仅试听片段，登录后可获得完整播放');
+  } else if (parsedActual) {
+    const { quality } = useUIStore.getState();
+    maybeToastQualityFallback(showToast, quality, parsedActual);
   }
 
   let fullTrack: AudioTrack = { ...track, url, resolvedQuality: usePlayerStore.getState().playingQuality || track.resolvedQuality };
