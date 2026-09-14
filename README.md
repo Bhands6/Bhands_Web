@@ -1,4 +1,4 @@
-# BhandsMusic Web
+<h1 align="center">BhandsMusic Web</h1>
 
 沉浸式在线音乐播放器 —— 将 BhandsMusic Electron 桌面应用迁移为 Web 网页版。
 
