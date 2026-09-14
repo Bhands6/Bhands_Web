@@ -19,9 +19,10 @@ uniform float uColorBoost, uCoverRes;
 uniform float uHasCover, uEdgeEnabled;
 uniform float uMouseActive, uPixel, uColorMixT;
 // 流星相关：uResolution 是**渲染缓冲**像素尺寸（与 gl_FragCoord 同一坐标系），
-// uMeteorSize 是拖尾的像素长度，uGrid 是粒子网格边长（用来推出每颗粒子的连续编号）
+// uMeteorSize 是拖尾的像素长度，uGrid 是粒子网格边长（用来推出每颗粒子的连续编号）。
+// uJellyAura 是水母花光晕精灵的基准直径（物理像素，JS 侧按屏高比例+驱动上限夹取）。
 uniform vec2 uResolution;
-uniform float uMeteorSize, uGrid;
+uniform float uMeteorSize, uGrid, uJellyAura;
 uniform sampler2D uCoverTex, uPrevCoverTex, uEdgeTex, uRippleTex;
 uniform int uRippleCount;
 uniform vec2 uMouseXY;
@@ -108,6 +109,15 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 
 // ---- 盘面压扁：面内 y 分量乘上的纵横比（配合相机 phi=0.34 俯角读成「盘」）----
 #define GALAXY_FLATTEN 0.42
+
+// ---- 水母花（Preset 11）形态常量：半透明花瓣头 + 下垂摆动触须（对齐用户参考图）----
+#define JELLY_COUNT 10.0       // 同屏花数（10 = 低配设备保护上限：粒子池固定，加花只稀释密度+多 2 个大光晕/朵）
+#define JELLY_TENDRILS 5.0     // 每朵的浮动腿数（v5：几条飘逸的腿，不再是 7 条密须）
+#define JELLY_HEAD_SHARE 0.05  // 核心亮斑粒子占比
+#define JELLY_HAZE_SHARE 0.05  // 花头光雾占比（大软点低 alpha，叠出参考图的光晕）
+#define JELLY_DOME_SHARE 0.50  // 半球伞盖粒子占比（v9：8→10 朵后从 0.46 上调，补回伞盖密度；其余 40% 为腿）
+// v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
+// 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
 // ---- 核球弥散：中心区向面内与深度做 3D 高斯展开 ----
 // ⚠️ 半径分布刻意把大量粒子压进核心（「中心密集亮核」的来源），但本实现的网格点
@@ -234,6 +244,18 @@ float rippleSumAt(vec2 p, out float maxAmp) {
   return sum;
 }
 
+// ---- 水母花（Preset 11）的流场扰动：对 simplex 噪声标量场取二维旋度（有限差分近似）----
+// curl 场无散度，粒子沿它运动像悬浮在湍流里，自然拉出有机的丝状卷曲（流场粒子做法）。
+// 形态由调用方的坐标缩放决定：低频出大卷曲的「丝带感」，高频会糊成噪点。
+vec2 jellyCurl(vec2 p, float tt){
+  float e = 0.35;
+  float n1 = snoise(vec3(p.x, p.y + e, tt));
+  float n2 = snoise(vec3(p.x, p.y - e, tt));
+  float n3 = snoise(vec3(p.x + e, p.y, tt));
+  float n4 = snoise(vec3(p.x - e, p.y, tt));
+  return vec2(n1 - n2, n4 - n3) / (2.0 * e);
+}
+
 void main(){
   float t = uTime * uSpeed;
   vec3 pos;
@@ -255,7 +277,7 @@ void main(){
   vMeteor = 0.0;
   vMeteorCenter = vec2(0.0);
   vPack1.z = 0.0;   // 拖尾方向角
-  vPack1.w = 0.0;   // 保留位（v8 星云的尘埃带已移除；以后要传数据先找这里）
+  vPack1.w = 0.0;   // 保留位：v8 星云尘埃带已移除；现由水母花（Preset 11）复用为粒子尺寸档位
   // >0 时覆盖粒子尺寸（单位：与 gl_PointSize 相同的像素）。
   // 流星要一个「长条」点精灵，尺寸按屏高算，跟粒子的景深/音量尺寸公式无关。
   float sizeOverride = -1.0;
@@ -783,7 +805,7 @@ void main(){
   //    · 后期泛光由既有泛光层承担，不引入 EffectComposer；相机动感走既有相机系统
   //    · 差速系数降为 0.08 + 0.05 整体自转，且相位从切入预设起算（见 GALAXY_* 注释）
   // ====================================================
-  else {
+  else if (uPreset < 10.5) {
     // ---- 半径分布：向核心聚集 ----
     // ❗clamp 底数：aUv.x 若被异常数据污染成负数，pow 会返回 NaN 让整片星云消失。
     float rr = pow(clamp(aUv.x, 0.0, 1.0), GALAXY_RADIAL_POW) * SPIRAL_RMAX + 0.05;
@@ -858,6 +880,168 @@ void main(){
   }
 
   // ====================================================
+  //  Preset 11: JELLY — 水母（高密度半球伞盖 + 浮动腿，v5 按用户明确要求重构形态）
+  //
+  //  结构：同屏 JELLY_COUNT 朵，每朵 = 亮白内核 + JELLY_DOME_SHARE 占比的高密度半球伞盖
+  //        （cosθ 均匀球面壳 + 内层体积，压扁成扁球）+ JELLY_TENDRILS 条浮动腿
+  //        （根部慢扫 + 行波 + curl 流场，波峰从根向梢传播，越到尖端摆幅越大、越透明）。
+  //  数据全部由 aRand 哈希现场生成（不占新 varying，槽位仍 4/8）；粒子尺寸档位经
+  //  vPack1.w（保留位复用）传给共享尺寸公式 —— 该保留位恢复使用后的第一个用户。
+  //  观感要点（对齐参考图，v4 按流场粒子思路强化）：
+  //  · 主层在预设 11 时切 AdditiveBlending（ParticleStage 门控）—— 黑底 + 低 alpha + 加色叠加
+  //    是「发光薄纱」的公式：单粒子观感与 Normal 相同，重叠区持续累加爆光出「发光雾」；
+  //  · 腿叠加 jellyCurl 流场扰动（无散度 curl 场），出有机丝状卷曲；
+  //  · 配色三段：顶白 / 中段淡蓝 / 伞缘淡紫；片元端走 pow2.6 柔边「薄纱」光斑；
+  //  · 整朵缓慢漂移 + 伞盖呼吸，不接节拍位置量（工作流 4.7③：音频只进亮度与幅度）。
+  // ====================================================
+  else {
+    float t6 = t * 0.55;   // 水母花的缓动时间（呼吸/漂移/摆动共用，纯时间量）
+    float creature = floor(hash11(aRand * 101.0) * JELLY_COUNT);
+    float role = hash11(aRand * 211.0);
+
+    // ---- 光晕槽位（v3 方案 B）：网格前 JELLY_COUNT×2 个粒子是「专属光晕精灵」，每朵恰好 2 个
+    //（内圈亮 / 外圈大），与流星槽位同款确定性分配 —— role 哈希是随机的，保证不了每朵都有光晕）。
+    // 光晕尺寸走 sizeOverride 消元（原始像素），景深公式那套 max 4px 的点描不出参考图的「大光团」。
+    float jgx = floor(aUv.x * uGrid);
+    float jgy = floor(aUv.y * uGrid);
+    float jpid = jgy * uGrid + jgx;
+    float auraKind = -1.0;
+    if (jpid < JELLY_COUNT * 2.0) {
+      creature = floor(jpid / 2.0);   // 光晕粒子强制归属对应花（锚点公式复用 creature）
+      auraKind = mod(jpid, 2.0);      // 0=内圈 1=外圈
+    }
+
+    // ---- 花朵锚点：横向铺开、纵向偏上（触须下垂占下半幅）----
+    // v8：锚点铺到更大画幅（fov45、相机半径 10.6 → 16:9 下半宽约 ±7.8、半高约 ±4.4，
+    // 旧值 8.8/3.6 只用了一半屏幕）
+    float cx = (hash11(creature * 17.0 + 3.0) - 0.5) * 10.0;
+    float cy = (hash11(creature * 29.0 + 5.0) - 0.5) * 4.4 + 0.8;
+    float cz = (hash11(creature * 43.0 + 7.0) - 0.5) * 3.0;
+    // 整朵缓慢游动（v8：双频有界正弦合成 —— 主频定巡游、低频慢偏移，路径不重样；
+    // 幅度约 ×3，治「移动范围太小」。仍为纯时间量，有界不发散，不接音频位置量）
+    cx += sin(t6 * 0.24 + creature * 2.1) * 1.50 + sin(t6 * 0.11 + creature * 3.7) * 0.80;
+    cy += sin(t6 * 0.31 + creature * 1.3) * 0.90 + sin(t6 * 0.17 + creature * 4.3) * 0.45;
+    cz += cos(t6 * 0.20 + creature * 2.9) * 0.80 + sin(t6 * 0.13 + creature * 5.1) * 0.40;
+    // 伞盖呼吸（整朵同步，微幅缩放）与每朵姿态角
+    float breath = 0.82 + 0.18 * sin(t6 * 1.5 + creature * 2.4);
+    float creatureTilt = (hash11(creature * 61.0) - 0.5) * 1.1;
+    // v7 脉冲推进：每朵错开的收缩循环（周期约 8s，快收缩/慢回弹，pow>1 让收缩相更短促）——
+    // 收缩时伞盖压扁微缩、身体上浮；腿部在各自分支里做滞后拖尾。相位只走时间（4.7③：不乘音频量）。
+    float cphase = t6 * 1.4 + hash11(creature * 131.0) * 6.2831853;
+    float contract = pow(0.5 - 0.5 * cos(cphase), 1.8);
+    cy += contract * 0.35;
+
+    vec3 jp = vec3(cx, cy, cz);
+    vec3 jc = vec3(0.62, 0.78, 1.0);   // 淡青蓝基色
+    float jellyAlpha = 0.0;
+    float sizeTag = 0.45;              // vPack1.w：核心 1.35 / 光雾 1.6 / 花瓣 0.85 / 触须 0.45
+
+    if (auraKind >= 0.0) {
+      // ---- 光晕精灵：贴在花锚点（随漂移/呼吸同步）的大软光斑 ----
+      // 内圈 ×0.58 亮一些、外圈 ×1.0 大而淡；泛光层自动再放 2.65× 叠加发光（共享几何）。
+      // alpha 极低：主层（预设 11 时 Additive，见分支头注释）给「乳白躯体」，泛光层 Additive 给「外扩光晕」。
+      //（只设 jc/jellyAlpha/sizeOverride —— pos/颜色/alpha 由分支尾部的公共代码统一处理）
+      bool inner = auraKind < 0.5;
+      jc = inner ? vec3(0.88, 0.94, 1.0) : vec3(0.62, 0.78, 1.0);
+      jellyAlpha = (inner ? 0.11 : 0.055) * (0.85 + 0.15 * breath);
+      sizeOverride = uJellyAura * (inner ? 0.58 : 1.0) / max(0.0001, uPixel * uPointScale);
+      maxRippleAmp = max(maxRippleAmp, uBass * 0.04);
+    } else if (role < JELLY_HEAD_SHARE) {
+      // ---- 亮核：紧凑高斯球，亮白微暖，呼吸同步微闪 ----
+      vec3 g = vec3(
+        gaussRand(aRand * 13.3 + 1.1),
+        gaussRand(aRand * 17.7 + 2.2),
+        gaussRand(aRand * 19.9 + 3.3)
+      ) * 0.20;
+      jp += g;
+      jellyAlpha = (0.50 + hash11(aRand * 23.0) * 0.28) * breath;
+      jc = mix(vec3(0.97, 0.99, 1.0), vec3(0.85, 0.92, 1.0), hash11(aRand * 29.0) * 0.5);
+      // v7 低音推暖核：鼓点时内核泛暖金（只进颜色，不进位置——工作流 4.7③）
+      jc = mix(jc, vec3(1.0, 0.87, 0.66), uBass * 0.35);
+      sizeTag = 1.35;
+      maxRippleAmp = max(maxRippleAmp, uMid * 0.08 + uBass * 0.05);
+    } else if (role < JELLY_HEAD_SHARE + JELLY_HAZE_SHARE) {
+      // ---- 光雾（v2 新增）：花头周围的大软点低 alpha 云，叠出参考图的光晕 ----
+      vec3 g = vec3(
+        gaussRand(aRand * 31.1 + 4.4),
+        gaussRand(aRand * 37.3 + 5.5),
+        gaussRand(aRand * 41.9 + 6.6)
+      ) * vec3(0.85, 0.70, 0.55);
+      jp += g;
+      jellyAlpha = 0.05 + hash11(aRand * 43.0) * 0.05;
+      jc = vec3(0.72, 0.84, 1.0);
+      sizeTag = 1.60;
+      maxRippleAmp = max(maxRippleAmp, uMid * 0.03);
+    } else if (role < JELLY_HEAD_SHARE + JELLY_HAZE_SHARE + JELLY_DOME_SHARE) {
+      // ---- 半球伞盖（v5）：高密度半球「壳」+ 少量内层体积，压扁成伞形 ----
+      // cosθ 均匀采样保证球面密度均匀（v4 花瓣的「辐条感」根因是径向参数化，这里换成实心圆顶）；
+      // 壳层 82% 打在球面上、内层 18% 立方根采样填体积 —— 高密度低 alpha + Additive 叠出「实心发光圆顶」。
+      float du = hash11(aRand * 431.0);
+      float dphi = hash11(aRand * 437.0) * 6.2831853;
+      float isInner = step(0.82, hash11(aRand * 449.0));
+      float domeR = (0.78 + hash11(creature * 83.0) * 0.34) * breath * (1.0 - 0.12 * contract);
+      float theta = acos(max(1.0 - du, 0.0));            // [0, π/2]：顶点 → 赤道缘
+      float rr = domeR * mix(1.0, pow(max(hash11(aRand * 457.0), 0.0), 0.3333) * 0.96, isInner);
+      float skirt = 1.0 - smoothstep(0.78, 1.0, du) * 0.12;   // 伞缘微收（内卷感）
+      float sth = sin(theta);
+      jp.x += sth * cos(dphi) * rr * skirt;
+      jp.z += sth * sin(dphi) * rr * skirt;
+      jp.y += cos(theta) * rr * (0.72 - 0.20 * contract); // 压扁：扁球伞盖（收缩时压得更扁）
+      // 伞面 alpha：顶实缘透；内层更透（体积感）。Additive 下高密度叠加即「实心发光」
+      jellyAlpha = (0.24 - du * 0.09) * mix(1.0, 0.55, isInner) * (1.0 + contract * 0.25);
+      // 配色三段（沿用 v4 公式）：顶部白 / 中段淡蓝 / 伞缘淡紫
+      jc = mix(vec3(0.97, 0.99, 1.0), vec3(0.60, 0.76, 1.0), smoothstep(0.15, 0.85, du));
+      jc = mix(jc, vec3(0.83, 0.72, 1.0), smoothstep(0.75, 1.0, du));
+      sizeTag = 0.80;
+      maxRippleAmp = max(maxRippleAmp, uMid * 0.09);
+    } else {
+      // ---- 浮动腿（v6 治「僵硬」）：根因是根部焊死 + 驻波式抖动 + 随机珠链采样。三件套：
+      // ① 根部慢扫：ta 随时间偏移，整条腿绕锚点摆（像水草被水推），越到梢部摆幅越大；
+      // ② 行波：主/细摆的相位带「-t6」，波峰从根向梢传播（驻波只会原地抖，行波才像漂在水里）；
+      // ③ curl 流场时间流速调快、梢部幅度加大 —— 梢部真正漂在湍流里。
+      // 另：tt 用黄金比例分层（fract(h + φ·pid)）把随机采样铺成近均匀，腿从「珠链」变「连续丝」。
+      float tt = fract(hash11(aRand * 601.0) + jpid * 0.618034);
+      float tn = floor(hash11(aRand * 503.0) * JELLY_TENDRILS);
+      float ta0 = (tn / JELLY_TENDRILS) * 6.2831853 + (hash11(creature * 91.0) - 0.5) * 0.8;
+      float ta = ta0 + sin(t6 * 0.42 + creature * 1.1 + tn * 2.3) * 0.45 * (0.30 + 0.70 * tt);
+      float tl = 1.8 + hash11(creature * 97.0 + tn * 13.0) * 1.1;
+      float bend = sin(t6 * 0.42 + creature * 1.3 - tt * 2.6 + tn * 1.7) * 0.30 * tt;
+      float sway = sin(tt * 3.4 - t6 * 1.05 + ta0 * 3.0 + creature) * (0.16 + 0.34 * tt);
+      float sway2 = cos(tt * 6.1 - t6 * 1.9 + ta0 * 4.7) * 0.07 * tt;
+      float spread = 0.30 + tt * 0.50 + sin(t6 * 0.5 + ta0 * 2.0) * 0.08;
+      jp.x += cos(ta) * spread + bend + sway + sway2 * 0.6;
+      jp.y += -(tt * tt) * tl + sin(tt * 3.0 - t6 * 0.8 + ta0) * 0.10 * tt;
+      jp.y -= contract * 0.30 * tt;   // v7 拖尾：身体上浮时腿梢滞后下坠（收缩「蹬水」的跟手）
+      jp.z += sin(ta) * spread * 0.6 + cos(tt * 5.0 - t6 * 1.5 + ta0 * 2.0) * 0.12 * tt;
+      // v4：curl noise 流场扰动（无散度 curl 场）。坐标缩放刻意取低：低频出大卷曲「丝带感」；
+      // 幅度随 tt 增大（尖端更自由），并钳制有限差分在最坏情况下的放大值。
+      vec2 cr = jellyCurl(vec2(ta0 * 1.7, tt * 1.3 + creature * 3.1), t6 * 0.50);
+      cr = clamp(cr, vec2(-1.0), vec2(1.0));
+      jp.x += cr.x * 0.34 * tt;
+      jp.z += cr.y * 0.22 * tt;
+      // 腿 alpha：向尖端渐隐（1-tt），根部略亮接住伞缘
+      jellyAlpha = (0.40 - tt * 0.26) * (0.7 + hash11(aRand * 613.0) * 0.3);
+      jc = mix(vec3(0.70, 0.83, 1.0), vec3(0.48, 0.64, 0.96), tt * 0.6);
+      sizeTag = 0.45;
+      maxRippleAmp = max(maxRippleAmp, uMid * 0.06 + (1.0 - tt) * 0.04);
+    }
+
+    // v7 深度雾：z 越小越远 —— 远的水母更暗、更偏深蓝（水下能见度衰减），近的亮而白，拉开纵深
+    // v8：游动 z 范围加大（±1.2 → ±2.7），雾窗同步拉宽保持远近渐变不被两端削平
+    float fogT = clamp((jp.z + 2.8) / 5.8, 0.0, 1.0);
+    jellyAlpha *= mix(0.50, 1.0, fogT);
+    jc = mix(jc * vec3(0.60, 0.74, 1.05) * 0.82, jc, fogT);
+
+    pos = jp;
+    // v7 封面色混比 12%→28%（有封面时经 uHasCover 门控；无封面保持纯内置配色）
+    vColor = mix(jc, coverColor, 0.12 + 0.16 * uHasCover);
+    // 音频只进亮度：低音让整朵微微提亮，不接 uBeat 位置量
+    vAlpha = jellyAlpha * (1.0 + uBass * 0.18);
+    vPack1.w = sizeTag;
+    maxRippleAmp = max(maxRippleAmp, uBass * 0.06 + uEnergy * 0.04);
+  }
+
+  // ====================================================
   //  鼠标交互 (仅 SILK)
   // ====================================================
   if (uMouseActive > 0.5 && uPreset < 0.5) {
@@ -898,12 +1082,16 @@ void main(){
       // 声波地形：亮度主要由「高度」给（分支里已算进 vColor），这里压低额外增益，
       // 否则脊顶会过曝成一条白线，看不出地形层次。
       vBright = 0.86 + maxRippleAmp * 0.42 + uBass * 0.045 + uEnergy * 0.030;
-    } else if (uPreset > 9.5) {
+    } else if (uPreset > 9.5 && uPreset < 10.5) {
       // 螺旋星云（v6）：核球亮、外缘暗，靠点的疏密与 vAlpha 表达，亮度增益保持克制。
       // ⚠️ 回到 v1 的公式（0.50 的 maxRippleAamp 权重）—— v5 曾用 0.46 + 显式臂脊加成，
       //    那会把旋臂推成一条高对比亮带，正是「像手绘描边」的成因之一。
       //    基准 0.90 → 1.02：RADIAL_POW 压平后叠层密度整体下降，同步补偿（见 vAlpha 注释）。
       vBright = 1.02 + maxRippleAmp * 0.50 + uBass * 0.040 + uEnergy * 0.035;
+    } else if (uPreset > 10.5) {
+      // 水母花（JELLY）：半透明纱质感靠低 alpha 叠层，额外增益保持克制；
+      // 呼吸已由分支内 breath 相位承担，刻意不接 uBeat（拍点会让整朵齐闪）。
+      vBright = 0.92 + maxRippleAmp * 0.60 + uBass * 0.05 + uEnergy * 0.04;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -922,7 +1110,7 @@ void main(){
     // （原来的 uBeat*0.30 会让鼓点一来整片幕「炸毛」成大颗粒）。
     float auroraDrive = maxRippleAmp * 0.28 + uBass * 0.10 + uMid * 0.06 + uBeat * 0.10;
     sz = clamp(depthSize * 0.62 * (1.0 + auroraDrive), 0.72, 2.60);
-  } else if (uPreset > 9.5) {
+  } else if (uPreset > 9.5 && uPreset < 10.5) {
     // 螺旋星云（SPIRAL v8）：星等两极分化（pow(h,3) 长尾：少量大亮星 + 大量小星）
     // × 闪烁 × 节拍脉冲撑大 —— 对齐参考实现的 pulseScale = 1 + uPulse * 0.6。
     // 上限放宽到 6.0：大亮星就该大，柔光球的 pow8 衰减保证它不会糊成一团。
@@ -932,6 +1120,11 @@ void main(){
     float galaxyDrive = (0.80 + galaxyTwinkle * 0.5)
                       * (1.0 + uBeat * 0.6 * mix(GALAXY_CORE_PULSE, 1.0, galaxyCore));
     sz = clamp(depthSize * galaxyStar * galaxyDrive * mix(GALAXY_CORE_SHRINK, 1.0, galaxyCore), 0.35, 6.00);
+  } else if (uPreset > 10.5) {
+    // 水母花（JELLY）：核心亮斑大、光雾更大更淡、花瓣中、触须细丝 —— 档位由分支经 vPack1.w 传入
+    // （核心 1.35 / 光雾 1.6 / 花瓣 0.85 / 触须 0.45）。尺寸不接 uBeat：呼吸走相位，节拍撑大会整朵齐胀。
+    // 0.40 下限保住触须丝的连续性（丝断了就散成点云）；上限 3.4 容纳光雾的大软点。
+    sz = clamp(depthSize * vPack1.w * (1.0 + maxRippleAmp * 0.22), 0.40, 3.40);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。
@@ -1059,9 +1252,17 @@ void main(){
 
   vec3 col = vColor * vBright;
   float spriteAlpha;
-  if (uPreset > 9.5) {
+  if (uPreset > 10.5) {
+    // 水母花（v4）：「薄纱」柔边光斑 —— 径向 pow2.6 衰减比圆点纹理更软、比星云 pow8 更宽。
+    // 大量低 alpha 粒子要叠出「发光薄雾」，柔边是前提（硬边/描边会在重叠处露馅看到单个粒子）。
+    float d = distance(gl_PointCoord, vec2(0.5));
+    spriteAlpha = pow(max(0.0, 1.0 - d), 2.6);
+    if (spriteAlpha < 0.004) discard;
+    col = mix(col, col * 1.25 + vec3(0.04), vRipple * 0.3);
+  } else if (uPreset > 9.5 && uPreset < 10.5) {
     // 螺旋星云：中心亮、边缘快速衰减的柔光球（对齐参考实现 pow(strength, 8.0)）。
     // 不采样圆点纹理、不做可读性描边 —— 星点是「锐利的光球」，描边会让它变成圆环。
+    // ⚠️ 必须收窄区间：水母花（11）要用回圆点纹理（半透明纱的柔边），不能继承星云的 pow8 光球。
     float d = distance(gl_PointCoord, vec2(0.5));
     spriteAlpha = pow(max(0.0, 1.0 - d), 8.0);
     if (spriteAlpha < 0.004) discard;
@@ -1079,6 +1280,7 @@ void main(){
     // 唱片封面要读成「照片」而不是「描了边的粒子」：可读性描边在唱片预设下收到 30%
     //（描边给亮粒子压黑边、暗粒子描白边，叠加在封面上等于给照片做半调网点，越描越糊）
     float rimKeep = (uPreset > 3.5 && uPreset < 4.5) ? 0.30 : 1.0;
+    // 水母花不再经过这里（走上面的 pow2.6 薄纱分支，天然无描边）。
     readableRim *= rimKeep;
     float outLum = dot(col, vec3(0.299, 0.587, 0.114));
     float lightParticle = smoothstep(0.50, 0.82, outLum) * nonBlack;
@@ -1137,8 +1339,14 @@ varying vec4 vPack1;
 
 void main(){
   float soft;
-  if (uPreset > 9.5) {
+  if (uPreset > 10.5) {
+    // 水母花：与主层同形的 pow2.6 柔边「薄纱」衰减，泛光层放大 2.65× 负责外扩辉光
+    float d = distance(gl_PointCoord, vec2(0.5));
+    soft = pow(max(0.0, 1.0 - d), 2.6);
+    if (soft < 0.004) discard;
+  } else if (uPreset > 9.5 && uPreset < 10.5) {
     // 螺旋星云：柔光球衰减（与主层同形），泛光层只负责把光晕放大铺开
+    // ⚠️ 收窄区间：水母花（11）用圆点纹理（与主层同形的柔边），不继承星云的 pow8 光球。
     float d = distance(gl_PointCoord, vec2(0.5));
     soft = pow(max(0.0, 1.0 - d), 8.0);
     if (soft < 0.004) discard;

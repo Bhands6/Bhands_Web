@@ -359,16 +359,188 @@ describe('迸发预设 8：封面取色（2026-09-11「颜色更好看 / 取至�
   });
 });
 
-describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
-  it('两个预设都注册了 shader 分支（9 用 else if 区间、10 用兜底 else）', () => {
-    // 9 必须写成区间判定，才能给 10 留出 > 9.5 的空间；10 是最后一个分支，用 else 兜底
+describe('水母花（预设 11：半透明花瓣头 + 下垂摆动触须）', () => {
+  const jellyCode = (() => {
+    const from = VERTEX_SHADER.indexOf('Preset 11: JELLY');
+    if (from < 0) throw new Error('未找到水母花分支');
+    return VERTEX_SHADER.slice(from).replace(/\/\/.*$/gm, '');
+  })();
+
+  const num = (re: RegExp, label: string): number => {
+    const m = VERTEX_SHADER.match(re);
+    if (!m) throw new Error('未找到 ' + label);
+    return Number(m[1]);
+  };
+
+  it('形态常量锁在合理区间（花数/腿数/角色占比）', () => {
+    // 花数上限 10 = 低配设备性能保护线：粒子池固定，加花只稀释每朵密度 + 每朵多 2 个大光晕（additive overdraw），
+    // 超 10 朵伞盖密度不可看；下限 6 保住水母群观感。用户 2026-09-14 要求加到 10。
+    expect(num(/#define JELLY_COUNT ([\d.]+)/, 'JELLY_COUNT')).toBeGreaterThanOrEqual(6);
+    expect(num(/#define JELLY_COUNT ([\d.]+)/, 'JELLY_COUNT')).toBeLessThanOrEqual(10);
+    expect(num(/#define JELLY_TENDRILS ([\d.]+)/, 'JELLY_TENDRILS')).toBeGreaterThanOrEqual(3);
+    expect(num(/#define JELLY_TENDRILS ([\d.]+)/, 'JELLY_TENDRILS')).toBeLessThanOrEqual(7);
+    expect(num(/#define JELLY_HEAD_SHARE ([\d.]+)/, 'JELLY_HEAD_SHARE')).toBeLessThanOrEqual(0.08);
+    expect(num(/#define JELLY_HAZE_SHARE ([\d.]+)/, 'JELLY_HAZE_SHARE')).toBeLessThanOrEqual(0.08);
+    expect(num(/#define JELLY_DOME_SHARE ([\d.]+)/, 'JELLY_DOME_SHARE')).toBeGreaterThanOrEqual(0.35);
+    expect(num(/#define JELLY_DOME_SHARE ([\d.]+)/, 'JELLY_DOME_SHARE')).toBeLessThanOrEqual(0.52);
+  });
+
+  it('整朵游动范围（v8）：锚点铺满大画幅 + 双频有界漂移，幅度够大且只用时间量', () => {
+    // v8 前锚点 8.8/3.6、漂移 ±0.55 —— 水母原地打转只占屏幕一小块（用户反馈移动范围太小）
+    // 锚点：横向 ×10.0、纵向 ×4.4（fov45/相机半径 10.6 下接近满屏铺开）
+    expect(jellyCode).toMatch(/float cx = \(hash11\(creature \* 17\.0 \+ 3\.0\) - 0\.5\) \* 10\.0/);
+    expect(jellyCode).toMatch(/float cy = \(hash11\(creature \* 29\.0 \+ 5\.0\) - 0\.5\) \* 4\.4 \+ 0\.8/);
+    // 双频漂移：主频巡游 + 低频慢偏移；水平主频幅度 ≥1.5（旧值 0.55）
+    expect(jellyCode).toMatch(
+      /cx \+= sin\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* 1\.50 \+ sin\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* [\d.]+/,
+    );
+    expect(jellyCode).toMatch(
+      /cy \+= sin\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* [\d.]+ \+ sin\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* [\d.]+/,
+    );
+    expect(jellyCode).toMatch(
+      /cz \+= cos\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* [\d.]+ \+ sin\(t6 \* [\d.]+ \+ creature \* [\d.]+\) \* [\d.]+/,
+    );
+    // 游动必须仍有界：纯正弦合成，不允许接节拍/线性增长位置量（工作流 4.7③）
+    expect(jellyCode).not.toMatch(/cx \+= [^;]*uBeat/);
+    expect(jellyCode).not.toMatch(/cy \+= [^;]*uBass/);
+    expect(jellyCode).not.toMatch(/cz \+= [^;]*uEnergy/);
+  });
+
+  it('浮动腿：行波传播 + 根部慢扫 + 均匀分层（v6 治僵硬三件套）', () => {
+    // 行波：相位 k*tt - w*t6 —— 波峰从根向梢传播（v5 驻波原地抖 = 僵硬根因之一）
+    expect(jellyCode).toMatch(/sway = sin\(tt \* [\d.]+ - t6 \* [\d.]+/);
+    // 根部慢扫：ta = ta0 + sin(t6*... + tn*...)，整条腿绕锚点摆、梢部摆幅放大（滞后感）
+    expect(jellyCode).toMatch(
+      /ta = ta0 \+ sin\(t6 \* [\d.]+ \+ creature \* [\d.]+ \+ tn \* [\d.]+\) \* [\d.]+ \* \(0\.30 \+ 0\.70 \* tt\)/,
+    );
+    // tt 黄金比例分层：随机采样铺成近均匀（珠链 → 连续丝）
+    expect(jellyCode).toMatch(/tt = fract\(hash11\(aRand \* 601\.0\) \+ jpid \* 0\.618034\)/);
+    // 向尖端渐隐：alpha 基式为「常数 − tt×斜率」
+    expect(jellyCode).toMatch(/jellyAlpha = \(0\.\d+ - tt \* 0\.\d+\)/);
+  });
+
+  it('伞盖必须是高密度半球（v5：cosθ 均匀球面壳 + 内层体积 + 压扁 + 伞缘微收）', () => {
+    // v4 花瓣的「辐条感」根因是径向参数化 —— v5 换成 acos 均匀球面采样
+    expect(jellyCode).toMatch(/theta = acos\(max\(1\.0 - du, 0\.0\)\)/);
+    // 内层体积用立方根采样（pow(x, 0.3333)，底数必须 clamp）
+    expect(jellyCode).toMatch(/pow\(max\(hash11\(aRand \* 457\.0\), 0\.0\), 0\.3333\)/);
+    expect(jellyCode).toMatch(/isInner = step\(0\.82, hash11/);
+    // 压扁成扁球伞盖（收缩时压得更扁）+ 伞缘微收
+    expect(jellyCode).toMatch(/cos\(theta\) \* rr \* \(0\.72 - 0\.20 \* contract\)/);
+    expect(jellyCode).toMatch(/skirt = 1\.0 - smoothstep\(0\.78, 1\.0, du\)/);
+    // 伞面 alpha：顶实缘透（0.24 - du×斜率）
+    expect(jellyCode).toMatch(/jellyAlpha = \(0\.24 - du \* 0\.09\)/);
+  });
+
+  it('光晕层存在（花头光晕，大软点低 alpha）', () => {
+    expect(jellyCode).toMatch(/sizeTag = 1\.60/);
+    expect(jellyCode).toMatch(/jellyAlpha = 0\.05 \+ hash11/);
+  });
+
+  it('光晕精灵（方案 B）：每朵 2 个专属槽位（确定性分配，不依赖哈希）', () => {
+    // 网格前 JELLY_COUNT×2 个粒子固定为光晕 —— role 哈希保证不了「每朵必有光晕」
+    expect(jellyCode).toMatch(/if \(jpid < JELLY_COUNT \* 2\.0\)/);
+    expect(jellyCode).toMatch(/creature = floor\(jpid \/ 2\.0\)/);
+    expect(jellyCode).toMatch(/auraKind = mod\(jpid, 2\.0\)/);
+  });
+
+  it('光晕尺寸走 sizeOverride 消元（原始像素，与流星拖尾同款）', () => {
+    expect(jellyCode).toMatch(
+      /sizeOverride = uJellyAura \* \(inner \? 0\.58 : 1\.0\) \/ max\(0\.0001, uPixel \* uPointScale\)/,
+    );
+    // 内外两档 alpha（内亮外淡），且走呼吸相位
+    expect(jellyCode).toMatch(/\(inner \? 0\.11 : 0\.055\)/);
+  });
+
+  it('片元端水母花走独立薄纱分支（不进圆点路径，天然无描边）', () => {
+    const jellyFrag = FRAGMENT_SHADER.slice(
+      FRAGMENT_SHADER.indexOf('if (uPreset > 10.5)'),
+      FRAGMENT_SHADER.indexOf('if (uPreset > 9.5 && uPreset < 10.5)')
+    );
+    expect(jellyFrag).toContain('pow(max(0.0, 1.0 - d), 2.6)');
+    // 薄纱分支内不得有可读性描边（暗环会切进大光晕）
+    expect(jellyFrag).not.toContain('readableRim');
+  });
+
+  it('尺寸档位经 vPack1.w（保留位）传入共享尺寸公式', () => {
+    expect(jellyCode).toMatch(/vPack1\.w = sizeTag/);
+    const sizeTier = VERTEX_SHADER.match(/uPreset > 10\.5\)[\s\S]{0,400}?sz = clamp\(([^;]+);/);
+    if (!sizeTier) throw new Error('未找到水母花尺寸档');
+    expect(sizeTier[1]).toContain('vPack1.w');
+  });
+
+  it('水母花亮度档不接 uBeat（呼吸走相位，节拍会让整朵齐闪）', () => {
+    const brightTier = VERTEX_SHADER.match(/uPreset > 10\.5\)\s*\{[^}]*?vBright = ([^;]+);/);
+    if (!brightTier) throw new Error('未找到水母花亮度档');
+    expect(brightTier[1]).not.toContain('uBeat');
+  });
+
+  it('片元/泛光的星云柔光球分支必须收窄，水母花有自己的 pow2.6 薄纱柔边分支', () => {
+    expect(FRAGMENT_SHADER).toMatch(/uPreset > 9\.5 && uPreset < 10\.5/);
+    expect(BLOOM_FRAGMENT_SHADER).toMatch(/uPreset > 9\.5 && uPreset < 10\.5/);
+    // v4：水母花的「薄纱」光斑 —— 比 dot 纹理更软、比星云 pow8 更宽的径向衰减（主层+泛光同形）
+    for (const [name, fs] of [
+      ['FRAGMENT_SHADER', FRAGMENT_SHADER],
+      ['BLOOM_FRAGMENT_SHADER', BLOOM_FRAGMENT_SHADER]
+    ] as const) {
+      expect(fs, `${name} 缺少水母花薄纱分支`).toMatch(
+        /if \(uPreset > 10\.5\) \{[\s\S]*?pow\(max\(0\.0, 1\.0 - d\), 2\.6\)/,
+      );
+    }
+  });
+
+  it('触须/花瓣受 curl noise 流场扰动（无散度场出有机丝状卷曲，低频出大卷曲）', () => {
+    // 旋度取自 simplex 噪声的有限差分（复用现有 snoise，不新增噪声函数）
+    expect(VERTEX_SHADER).toMatch(/vec2 jellyCurl\(vec2 p, float tt\)/);
+    expect(VERTEX_SHADER).toMatch(/jellyCurl\(vec2\(ta0 \* [\d.]+/);
+    // 差分在最坏情况会放大噪声差值，位移幅度必须钳制
+    expect(VERTEX_SHADER).toMatch(/clamp\(cr, vec2\(-1\.0\), vec2\(1\.0\)\)/);
+  });
+
+  it('花瓣有淡紫色散层（参考图配色公式：核心白 / 边缘淡蓝 / 淡紫做色散）', () => {
+    expect(jellyCode).toMatch(/vec3\(0\.83, 0\.72, 1\.0\)/);
+  });
+
+  it('v7 深度雾：远的水母更暗更偏蓝（水下能见度），拉开纵深', () => {
+    expect(jellyCode).toMatch(/fogT = clamp\(\(jp\.z \+ [\d.]+\) \/ [\d.]+, 0\.0, 1\.0\)/);
+    expect(jellyCode).toMatch(/jellyAlpha \*= mix\(0\.\d+, 1\.0, fogT\)/);
+    // 远处颜色向深蓝压暗（雾色乘法在前、fogT 混合在后）
+    expect(jellyCode).toMatch(/jc = mix\(jc \* vec3\([\d.]+, [\d.]+, [\d.]+\) \* [\d.]+, jc, fogT\)/);
+  });
+
+  it('v7 脉冲推进：收缩循环 + 身体上浮 + 腿梢拖尾（相位不接音频量）', () => {
+    // 快收缩/慢回弹的非对称包络
+    expect(jellyCode).toMatch(/contract = pow\(0\.5 - 0\.5 \* cos\(cphase\), [\d.]+\)/);
+    // 收缩时身体上浮
+    expect(jellyCode).toMatch(/cy \+= contract \* 0\.35/);
+    // 腿梢滞后下坠（蹬水的「跟手」）
+    expect(jellyCode).toMatch(/jp\.y -= contract \* 0\.30 \* tt/);
+    // cphase 不含 uBeat/uBass 等音频量（位置/相位只走时间）
+    const cphaseLine = jellyCode.match(/float cphase = ([^;]+);/);
+    if (!cphaseLine) throw new Error('未找到 cphase');
+    expect(cphaseLine[1]).not.toContain('uBeat');
+    expect(cphaseLine[1]).not.toContain('uBass');
+  });
+
+  it('v7 颜色接回音乐：封面混比门控提升 + 低音暖核', () => {
+    expect(jellyCode).toMatch(/mix\(jc, coverColor, 0\.12 \+ 0\.16 \* uHasCover\)/);
+    expect(jellyCode).toMatch(/vec3\(1\.0, 0\.87, 0\.66\), uBass \* 0\.35/);
+  });
+});
+
+describe('声波地形 / 螺旋星云 / 水母花（预设 9 / 10 / 11）', () => {
+  it('三个预设都注册了 shader 分支（9/10 用 else if 区间、11 用兜底 else）', () => {
+    // 9/10 必须写成区间判定，给后续预设留空间；11 是最后一个分支，用 else 兜底
     expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 9\.5\)/);
     // 第八个预设（迸发 8）必须收窄成区间，不能再是裸 else —— 否则 9/10 永远走不到
     expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 8\.5\)/);
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 10\.5\)/);
     const i9 = VERTEX_SHADER.indexOf('else if (uPreset < 9.5)');
     const i10 = VERTEX_SHADER.indexOf('Preset 10: SPIRAL');
+    const i11 = VERTEX_SHADER.indexOf('Preset 11: JELLY');
     expect(i9, '预设 9 的分支必须存在').toBeGreaterThan(-1);
     expect(i10, '预设 10 的分支必须存在').toBeGreaterThan(i9);
+    expect(i11, '预设 11 的分支必须存在').toBeGreaterThan(i10);
   });
 
   /**
@@ -453,9 +625,9 @@ describe('声波地形 / 螺旋星云（预设 9 / 10）', () => {
     //   具体数值由 v8 那组断言（下限 ≥0.3、上限 ≥5.0）负责。
     expect(VERTEX_SHADER).toMatch(/uPreset > 9\.5[\s\S]{0,700}?sz = clamp\(depthSize \* galaxyStar/);
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5[\s\S]{0,220}?sz = clamp\(depthSize \* 0\.5\d/);
-    // 亮度：两者都要有独立档，不能共用 6~8 的通用档
+    // 亮度：两者都要有独立档，不能共用 6~8 的通用档（水母花 11 也另立档，见其 describe）
     expect(VERTEX_SHADER).toMatch(/uPreset > 8\.5 && uPreset < 9\.5/);
-    expect(VERTEX_SHADER).toMatch(/else if \(uPreset > 9\.5\)/);
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset > 9\.5 && uPreset < 10\.5\)/);
   });
 });
 
@@ -645,13 +817,14 @@ describe('螺旋星云 v8（2 主旋臂 + 差速自转，对齐新参考实现�
       ['FRAGMENT_SHADER', FRAGMENT_SHADER],
       ['BLOOM_FRAGMENT_SHADER', BLOOM_FRAGMENT_SHADER]
     ] as const) {
+      // ⚠️ 分支必须收窄成区间（9.5~10.5）：水母花（11）要用回圆点纹理，不能继承星云的 pow8 光球
       expect(fs, `${name} 缺少星云柔光球分支`).toMatch(
-        /if \(uPreset > 9\.5\) \{[\s\S]*?pow\(max\(0\.0, 1\.0 - d\), 8\.0\)/,
+        /if \(uPreset > 9\.5 && uPreset < 10\.5\) \{[\s\S]*?pow\(max\(0\.0, 1\.0 - d\), 8\.0\)/,
       );
     }
     // 主层的星云分支排在圆点纹理采样之前，且分支内不得采样 uDotTex
     const spiralFrag = FRAGMENT_SHADER.slice(
-      FRAGMENT_SHADER.indexOf('if (uPreset > 9.5)'),
+      FRAGMENT_SHADER.indexOf('if (uPreset > 9.5 && uPreset < 10.5)'),
       FRAGMENT_SHADER.indexOf('vec4 tex = texture2D')
     );
     expect(spiralFrag).not.toContain('uDotTex');

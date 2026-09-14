@@ -19,13 +19,14 @@ import {
 
 /**
  * Three.js 粒子舞台 —— 完整移植桌面版 main.js 的 shader 粒子系统：
- * - 11 种预设（uPreset shader 分支）：0 丝绸 / 1 滚筒隧道 / 2 星球 / 3 虚空 / 4 唱片 / 5 星河壁纸
+ * - 12 种预设（uPreset shader 分支）：0 丝绸 / 1 滚筒隧道 / 2 星球 / 3 虚空 / 4 唱片 / 5 星河壁纸
  *   ／ 6 极光 / 7 万花筒 / 8 迸发（换歌爆一次，之后常驻：匀速缓慢自转 + 整片上下浮动）
  *   ／ 9 声波地形（随音乐起伏的山脊 + 推进扫描波前）/ 10 螺旋星云（2 主旋臂 + 差速自转 + 节拍脉冲）
+ *   ／ 11 水母花（半透明花瓣头 + 下垂摆动触须，低 alpha 加色叠出「纱」质感）
  * - 封面纹理采样取色（新旧封面 crossfade）+ CPU 端 Sobel 边缘纹理（丝绸轮廓增益）
  * - 涟漪系统：bass 上升沿在 3×3 宫格随机触发 DataTexture 涟漪
  * - 音频包络（attack/release）+ 唱片/壁纸预设专用频段重映射
- * - 双层渲染：NormalBlending 主层 + AdditiveBlending 泛光层
+ * - 双层渲染：NormalBlending 主层 + AdditiveBlending 泛光层（水母花预设 11 时主层切 Additive）
  * - 环绕相机：预设机位 + 鼠标视差 + 电影漂移 + 节拍 FOV 冲击
  * 切换预设不重建场景（只改 uPreset + 相机目标 + 转场脉冲），与桌面版一致。
  */
@@ -48,13 +49,15 @@ const BASE_FOV = 45;
  */
 const METEOR_TRAIL_RATIO = 0.34;
 /**
- * 拖尾长度的硬上限（像素）。**这个值必须由硬件决定，不能拍脑袋**：
+ * 点精灵尺寸的兜底硬上限（物理像素）。**这个值必须由硬件决定，不能拍脑袋**：
  * gl_PointSize 会被驱动静默夹到 ALIASED_POINT_SIZE_RANGE 的 max，
- * 桌面 GL 常见 255、部分移动 GPU 只有 63/64。写死了 420 的话，
- * 1080p 屏算出 280px 就被悄悄截断，拖尾长度与预期不符。
+ * 桌面 GL 常见 255、部分移动 GPU 只有 63/64。
  * 所以这里只作兜底，真实上限在 syncPixelUniforms 里用 gl.getParameter 查询。
+ * ⚠️ 该上限同时供两处用：流星拖尾（再受 METEOR_TRAIL_RATIO 屏高比例限制，不受它影响）
+ * 与水母花光晕精灵（2026-09-11 方案 B：200~500px 的大软光斑）——从 420 提到 720 后
+ * 流星仍由 RATIO 决定尺寸（不变），光晕才吃这个新上限。
  */
-const METEOR_TRAIL_MAX_PX = 420;
+const POINT_SPRITE_MAX_PX = 720;
 
 /** 每个预设的相机机位（对应桌面版 setPresetCamera 的 radius/phi）
  *  可见范围 ≈ radius 处 FOV45 的取景框：纵向 ±radius*0.414，横向再乘宽高比。
@@ -76,7 +79,15 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   //    RMAX 7.4 + 相机 8.8 不动 —— 星云在屏上整体放大一圈，水平有意出血铺满、
   //    外缘由 vAlpha 淡出窗口收住。再想放大优先加 RMAX（相机不动=屏上变大），
   //    需要重新构图时才动 radius，否则会「缩在中央」或「切掉外缘」。
-  spiral: { radius: 8.8, phi: 0.34 }
+  // 螺旋星云：盘半径 7.4（见 particleShaders.ts 的 SPIRAL_RMAX）+ 外缘。
+  // ⚠️ 这里的 radius 与 SPIRAL_RMAX 是**一对**：2026-09-11 用户要求扩大后定稿为
+  //    RMAX 7.4 + 相机 8.8 不动 —— 星云在屏上整体放大一圈，水平有意出血铺满、
+  //    外缘由 vAlpha 淡出窗口收住。再想放大优先加 RMAX（相机不动=屏上变大），
+  //    需要重新构图时才动 radius，否则会「缩在中央」或「切掉外缘」。
+  spiral: { radius: 8.8, phi: 0.34 },
+  // 水母花：正对观众（phi 小），纵向跨度大（花瓣顶 ~+3 / 触须底 ~-4）→ 相机拉远到 10.6
+  // （FOV45 半高 ≈ 10.6×0.414 ≈ 4.39，16:9 半宽 ≈ 7.8；花横向铺开 ±4.4+花瓣半径，出血留边）
+  jelly: { radius: 10.6, phi: 0.06 }
 };
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -259,6 +270,8 @@ export default function ParticleStage() {
       uResolution: { value: new THREE.Vector2(1, 1) },
       uMeteorSize: { value: 240 },
       uGrid: { value: 118 },
+      // 水母花（Preset 11）光晕精灵基准直径（物理像素；syncPixelUniforms 按屏高 25% + 驱动上限重算）
+      uJellyAura: { value: 240 },
       uColorMixT: { value: 1.0 },
       uTintColor: { value: new THREE.Color('#9db8cf') },
       uTintStrength: { value: 0 },
@@ -288,13 +301,15 @@ export default function ParticleStage() {
       | null;
     const maxPointSize = Math.max(
       64,
-      Math.min(METEOR_TRAIL_MAX_PX, pointSizeRange && pointSizeRange.length > 1 ? pointSizeRange[1] : 255)
+      Math.min(POINT_SPRITE_MAX_PX, pointSizeRange && pointSizeRange.length > 1 ? pointSizeRange[1] : 255)
     );
     const syncPixelUniforms = () => {
       renderer.getDrawingBufferSize(dbSize);
       uniforms.uResolution.value.copy(dbSize);
       uniforms.uPixel.value = renderer.getPixelRatio();
       uniforms.uMeteorSize.value = Math.min(dbSize.y * METEOR_TRAIL_RATIO, maxPointSize);
+      // 水母花光晕：外圈光斑直径 = 屏高的 25%（物理像素），与流星同款硬件上限夹取
+      uniforms.uJellyAura.value = Math.min(dbSize.y * 0.25, maxPointSize);
     };
 
     // ---------- 双层粒子（泛光层 + 主层，共享几何） ----------
@@ -582,6 +597,14 @@ export default function ParticleStage() {
         uniforms.uPreset.value = idx;
         uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value as number, 0.15);
         Object.assign(orbitTarget, PRESET_CAMERA[s.visual.effect]);
+        // 水母花（11）：主层切 AdditiveBlending —— 「黑底 + 低 alpha + 加色叠加」是
+        // 发光薄纱的公式：黑背景下单粒子观感与 Normal 相同，但重叠区会持续累加爆光，
+        // 叠出「发光薄雾」质感（depthWrite 已是 false，无遮挡问题）；其余预设恢复 Normal。
+        const wantBlending = idx === EFFECT_PRESET_INDEX.jelly ? THREE.AdditiveBlending : THREE.NormalBlending;
+        if (material.blending !== wantBlending) {
+          material.blending = wantBlending;
+          material.needsUpdate = true;
+        }
         // 切到迸发效果时立刻爆一次，否则要等下一首歌才看得到
         if (s.visual.effect === 'burst') burstRequested = true;
         // 切到螺旋星云时差速自转相位归零（见 galaxyAt 注释）
@@ -676,10 +699,14 @@ export default function ParticleStage() {
           // 声波地形：抬低音（地面鼓起）、压高音（避免细砂砾闪得比山脊还亮）
           bass = Math.min(1.0, bass * 1.32);
           treble = Math.min(0.72, treble * 0.82);
-        } else if (preset > 9.5) {
+        } else if (preset > 9.5 && preset < 10.5) {
           // 螺旋星云：抬中音（旋臂亮度）、压低音（盘面不要随鼓点整体浮动）
           mid = Math.min(1.0, mid * 1.26);
           bass = Math.min(0.62, bass * 0.84);
+        } else if (preset > 10.5) {
+          // 水母花：花瓣呼吸走相位，音频只调亮度 —— 中频微抬、低频压住防整朵乱胀
+          mid = Math.min(0.95, mid * 1.10);
+          bass = Math.min(0.60, bass * 0.88);
         }
       } else if (preset >= 4) {
         const wallpaperAudio = preset === 5;
