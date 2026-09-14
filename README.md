@@ -18,10 +18,8 @@
 **首页**（未登录 / 已登录）
 
 <p align="center">
-  <img src="docs/screenshots/02-home-guest.png" width="720" alt="未登录首页">
-</p>
-<p align="center">
-  <img src="docs/screenshots/03-home-logged-in.jpg" width="720" alt="登录后首页">
+  <img src="docs/screenshots/02-home-guest.png" width="49%" alt="未登录首页">
+  <img src="docs/screenshots/03-home-logged-in.jpg" width="49%" alt="登录后首页">
 </p>
 
 
