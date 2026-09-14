@@ -65,6 +65,35 @@ function isAllowedStreamHost(hostname: string): boolean {
   return streamHostAllowlist().some((d) => h === d || h.endsWith('.' + d));
 }
 
+// ============================================================
+// 302 直连省带宽（2026-09-14）：代理模式下音频 100% 占用服务器出带宽，
+// Lighthouse 套餐上限仅 3 Mbps，单人听无损即打满（实测 21% 采样点顶格）。
+// 对实测过 CORS 的 CDN 改用 302 让浏览器直连：音频流量绕过服务器。
+// 网易 CDN 全局 Access-Control-Allow-Origin: * + Allow-Headers 含 Range
+// （含 403 响应实测），与前端 crossOrigin='anonymous' + AnalyserNode 频谱链路兼容。
+// 其余音源（gdmusic/unblock/lx 返回的链）CORS 未知，继续走同源代理兜底。
+// 服务器 .env 设 STREAM_DIRECT_REDIRECT=off 可整体回退代理模式（无需重新打包）。
+// ============================================================
+const DIRECT_REDIRECT_HOSTS = ['music.126.net'];
+
+function directRedirectEnabled(): boolean {
+  return process.env.STREAM_DIRECT_REDIRECT !== 'off';
+}
+
+/** 是否可 302 直连：https + 直连白名单域（完整解析，畸形 URL 一律 false 走代理） */
+export function shouldDirectRedirect(rawUrl: string): boolean {
+  if (!directRedirectEnabled()) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const h = parsed.hostname.toLowerCase();
+  return DIRECT_REDIRECT_HOSTS.some((d) => h === d || h.endsWith('.' + d));
+}
+
 /**
  * 抓取上游音频。逐跳校验重定向目标域名（redirect: manual），
  * 仅对响应头限时（超时后清除），音频 body 可长时间流式传输。
@@ -115,6 +144,13 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
     if (!limitedByIp(request, 'stream', 60, 60_000)) {
       return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+
+    // 直连优化：白名单 CDN 的 https 直链 302 给浏览器（音频流量不过服务器）。
+    // 放在频控之后：防止被当作开放重定向器滥用；audio 元素原生跟随 302 并保留 Range 头。
+    if (shouldDirectRedirect(url)) {
+      reply.header('Cache-Control', 'no-store');
+      return reply.redirect(url, 302);
     }
 
     try {
