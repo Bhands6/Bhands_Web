@@ -13,6 +13,15 @@ const EVENT_SOURCE_ORDER = ['wy', 'kw'];
 const MAX_SCRIPTS = 12;
 /** 沙盒 HTTP 响应体上限：脚本（互联网上的第三方 LX 源）无界累积可 OOM */
 const MAX_SANDBOX_BODY_BYTES = 2 * 1024 * 1024;
+/** 上传脚本大小上限（与前端一致，500KB） */
+const MAX_SCRIPT_BYTES = 512_000;
+/**
+ * 内置音源脚本目录（DATA_DIR/lx-builtin/*.js）：站长预装的共享音源（如 wy）。
+ * 与用户上传脚本（lx-scripts.json）的区别：不进存档 JSON、不出现在面板列表、不可删除——
+ * 面板 UI 只管理「访客自己浏览器里的本地脚本」，服务器磁盘上只有预装音源。
+ * 放 data 目录（不进 git、随 docker 卷持久化）：第三方解锁音源不入公开仓库。
+ */
+const BUILTIN_DIR = path.join(ensureDataDir(), 'lx-builtin');
 
 function getQualityCascade(quality: string): string[] {
   const mapped = QUALITY_MAP[quality] || '320k';
@@ -595,19 +604,36 @@ const SCRIPTS_FILE = path.join(ensureDataDir(), 'lx-scripts.json');
 interface PersistedScript { id: string; name: string; script: string; }
 
 function saveScripts() {
-  const list: PersistedScript[] = Object.keys(_runners).map(id => {
-    const r = _scriptsStore[id];
-    return r ? { id, name: r.name, script: r.script } : null;
-  }).filter(Boolean) as PersistedScript[];
-  fs.writeFileSync(SCRIPTS_FILE, JSON.stringify({ scripts: list, activeId: _activeRunnerId }, null, 2));
+  // 内置音源不进存档 JSON：它们来自磁盘 lx-builtin/ 目录，每次启动重新加载
+  const list: PersistedScript[] = Object.keys(_runners)
+    .filter(id => !_builtinIds.has(id))
+    .map(id => {
+      const r = _scriptsStore[id];
+      return r ? { id, name: r.name, script: r.script } : null;
+    }).filter(Boolean) as PersistedScript[];
+  // activeId 同理排除内置（JSON 只描述用户脚本状态，避免「activeId 指向不存在条目」的假象）
+  const activeId = _activeRunnerId && !_builtinIds.has(_activeRunnerId) ? _activeRunnerId : null;
+  fs.writeFileSync(SCRIPTS_FILE, JSON.stringify({ scripts: list, activeId }, null, 2));
 }
 
 export async function loadPersistedScripts(): Promise<number> {
+  // 先加载内置音源（站长预装，随部署长期可用；count = 当前可用的内置脚本总数）
+  const builtinCount = await loadBuiltinScripts();
   try {
-    if (!fs.existsSync(SCRIPTS_FILE)) return 0;
+    if (!fs.existsSync(SCRIPTS_FILE)) return builtinCount;
     const data = JSON.parse(fs.readFileSync(SCRIPTS_FILE, 'utf8'));
+    const oldList: PersistedScript[] = Array.isArray(data.scripts) ? data.scripts : [];
+    // 迁移（2026-09-14）：面板改为「访客本地脚本」模式后，服务器不再持久化用户上传脚本。
+    // 内置音源已就位时，历史存档（旧 wy 与试传残留）备份后清空——它们全部由本地脚本/内置音源取代。
+    if (builtinCount > 0 && oldList.length > 0) {
+      const bak = SCRIPTS_FILE + '.bak-' + new Date().toISOString().slice(0, 10);
+      try { fs.copyFileSync(SCRIPTS_FILE, bak); } catch { /* 备份失败不阻塞迁移 */ }
+      fs.writeFileSync(SCRIPTS_FILE, JSON.stringify({ scripts: [], activeId: null }, null, 2));
+      console.log(`[LxMusic] 迁移：${oldList.length} 个历史脚本已备份至 ${path.basename(bak)} 并清空；内置音源 ${builtinCount} 个已加载`);
+      return builtinCount;
+    }
     let count = 0;
-    for (const s of (data.scripts || [])) {
+    for (const s of oldList) {
       // 字段校验：损坏条目跳过而不是靠 init 内部 catch 兜底（损坏时至少这里可日志排查）
       if (!s || typeof s.id !== 'string' || typeof s.script !== 'string') continue;
       if (_runners[s.id]) continue;
@@ -617,6 +643,38 @@ export async function loadPersistedScripts(): Promise<number> {
     return count;
   } catch (err: any) {
     console.warn('[LxMusic] 加载持久化脚本失败:', err?.message || err);
+    return builtinCount;
+  }
+}
+
+/**
+ * 加载内置音源脚本（DATA_DIR/lx-builtin/*.js，按文件名排序保证激活顺序稳定）。
+ * 加载成功即注册为不可删除的 runner（id = builtin-<文件名去 .js>），不写入任何持久化存储。
+ */
+async function loadBuiltinScripts(): Promise<number> {
+  try {
+    if (!fs.existsSync(BUILTIN_DIR)) return 0;
+    const files = fs.readdirSync(BUILTIN_DIR).filter(f => f.toLowerCase().endsWith('.js')).sort();
+    for (const f of files) {
+      const full = path.join(BUILTIN_DIR, f);
+      try {
+        const st = fs.statSync(full);
+        if (!st.isFile()) continue;
+        if (st.size > MAX_SCRIPT_BYTES) {
+          console.warn('[LxMusic] 跳过内置脚本（超过 500KB）:', f);
+          continue;
+        }
+        const id = 'builtin-' + f.replace(/\.js$/i, '');
+        if (_runners[id]) continue;
+        const script = fs.readFileSync(full, 'utf8');
+        await initRunner(id, script, '内置音源 ' + f.replace(/\.js$/i, ''), false, true);
+      } catch (err: any) {
+        console.warn('[LxMusic] 内置脚本加载失败:', f, err?.message || err);
+      }
+    }
+    return _builtinIds.size;
+  } catch (err: any) {
+    console.warn('[LxMusic] 读取内置脚本目录失败:', err?.message || err);
     return 0;
   }
 }
@@ -627,13 +685,19 @@ export async function loadPersistedScripts(): Promise<number> {
 const _runners: Record<string, LxMusicRunner> = {};
 const _scriptsStore: Record<string, { name: string; script: string }> = {};
 let _activeRunnerId: string | null = null;
+/** 内置音源 runner id 集合：不进存档 JSON、不出现在列表、不可删除 */
+const _builtinIds = new Set<string>();
 
-export async function initRunner(scriptId: string, scriptContent: string, scriptName?: string, activate = false): Promise<LxMusicRunner | null> {
+export async function initRunner(scriptId: string, scriptContent: string, scriptName?: string, activate = false, builtin = false): Promise<LxMusicRunner | null> {
   const runner = new LxMusicRunner(scriptId, scriptContent, scriptName || 'unknown');
   const ok = await runner.init();
   if (ok) {
     _runners[scriptId] = runner;
-    _scriptsStore[scriptId] = { name: scriptName || scriptId, script: scriptContent };
+    if (builtin) {
+      _builtinIds.add(scriptId);
+    } else {
+      _scriptsStore[scriptId] = { name: scriptName || scriptId, script: scriptContent };
+    }
     if (activate || !_activeRunnerId) _activeRunnerId = scriptId;
     saveScripts();
     return runner;
@@ -645,12 +709,21 @@ export function canAddScript(): boolean {
   return Object.keys(_runners).length < MAX_SCRIPTS;
 }
 
+export function isBuiltinRunner(scriptId: string): boolean {
+  return _builtinIds.has(scriptId);
+}
+
 export function setActiveRunner(scriptId: string): boolean {
   if (_runners[scriptId]) { _activeRunnerId = scriptId; return true; }
   return false;
 }
 
 export function removeRunner(scriptId: string): void {
+  // 内置音源不可删除（防御：路由层与数据层双拦）
+  if (_builtinIds.has(scriptId)) {
+    console.warn('[LxMusic] 拒绝删除内置音源:', scriptId);
+    return;
+  }
   // terminate worker：脚本里的同步死循环 / 永久 setInterval / 泄漏面随线程一起销毁
   _runners[scriptId]?.dispose();
   delete _runners[scriptId];
@@ -663,21 +736,24 @@ export function removeRunner(scriptId: string): void {
 }
 
 export function listRunners(): Array<{ id: string; initialized: boolean; sources: string[]; active: boolean }> {
-  return Object.keys(_runners).map((id) => ({
-    id, initialized: _runners[id].isInitialized(),
-    sources: _runners[id].getAvailableSourceKeys(),
-    active: id === _activeRunnerId
-  }));
+  // 内置音源不出现在面板列表（UI 只管理访客本地脚本；内置对用户不可见）
+  return Object.keys(_runners)
+    .filter(id => !_builtinIds.has(id))
+    .map((id) => ({
+      id, initialized: _runners[id].isInitialized(),
+      sources: _runners[id].getAvailableSourceKeys(),
+      active: id === _activeRunnerId
+    }));
 }
 
-export async function parseFromLxMusic(params: {
-  id: string; name: string; artists: string; album?: string; duration?: number; quality?: string; scriptId?: string;
-}): Promise<{ url: string; source: string; quality: string } | null> {
-  const { id, name, artists, album = '', duration = 0, quality = '320k', scriptId } = params;
-  let runner: LxMusicRunner | null = null;
-  if (scriptId && _runners[scriptId]) runner = _runners[scriptId];
-  else if (_activeRunnerId && _runners[_activeRunnerId]) runner = _runners[_activeRunnerId];
-  if (!runner?.isInitialized()) return null;
+/** 解析入参（服务器常驻脚本与一次性脚本共用） */
+interface RunnerResolveParams {
+  id: string; name: string; artists: string; album?: string; duration?: number; quality?: string;
+}
+
+/** 级联解析核心：音质降级 × 音源顺序逐个尝试，直到拿到可用直链 */
+async function resolveWithRunner(runner: LxMusicRunner, p: RunnerResolveParams): Promise<{ url: string; source: string; quality: string } | null> {
+  if (!runner.isInitialized()) return null;
   const available = runner.getAvailableSourceKeys();
   if (!available.length) return null;
   const isEvent = available.length === 1 && available[0] === '_lxEvent';
@@ -693,11 +769,12 @@ export async function parseFromLxMusic(params: {
     ? EVENT_SOURCE_ORDER
     : [...LX_SOURCE_PRIORITY.filter((s) => available.includes(s)), ...available.filter((s) => !LX_SOURCE_PRIORITY.includes(s))];
 
+  const duration = p.duration ?? 0;
   const minutes = Math.floor(duration / 60000);
   const seconds = Math.floor((duration % 60000) / 1000);
   const interval = String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
-  const songInfo = { songmid: String(id), name: name || '', singer: artists || '', album, interval, img: '' };
-  const cascade = getQualityCascade(quality);
+  const songInfo = { songmid: String(p.id), name: p.name || '', singer: p.artists || '', album: p.album || '', interval, img: '' };
+  const cascade = getQualityCascade(p.quality || '320k');
   for (const lxQ of cascade) {
     for (const src of order) {
       try {
@@ -707,4 +784,38 @@ export async function parseFromLxMusic(params: {
     }
   }
   return null;
+}
+
+export async function parseFromLxMusic(params: {
+  id: string; name: string; artists: string; album?: string; duration?: number; quality?: string; scriptId?: string;
+}): Promise<{ url: string; source: string; quality: string } | null> {
+  const { id, name, artists, album = '', duration = 0, quality = '320k', scriptId } = params;
+  let runner: LxMusicRunner | null = null;
+  if (scriptId && _runners[scriptId]) runner = _runners[scriptId];
+  else if (_activeRunnerId && _runners[_activeRunnerId]) runner = _runners[_activeRunnerId];
+  if (!runner) return null;
+  return resolveWithRunner(runner, { id, name, artists, album, duration, quality });
+}
+
+/**
+ * 一次性脚本解析：为「访客本地脚本」服务——脚本随请求携带，在独立沙盒里跑完即销毁
+ * （不注册进 runner 表、不落存档 JSON、不进内存 store，服务器磁盘不留任何副本）。
+ * 成本：每次解析冷启动一个 worker（脚本 init + 解析），比常驻路径多一次初始化耗时。
+ */
+export async function resolveWithScriptOnce(scriptContent: string, p: RunnerResolveParams): Promise<{ url: string; source: string; quality: string } | null> {
+  const runner = new LxMusicRunner(
+    'once-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+    scriptContent,
+    '一次性脚本'
+  );
+  const ok = await runner.init();
+  if (!ok) {
+    runner.dispose();
+    return null;
+  }
+  try {
+    return await resolveWithRunner(runner, p);
+  } finally {
+    runner.dispose();
+  }
 }

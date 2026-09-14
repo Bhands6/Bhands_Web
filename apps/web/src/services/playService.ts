@@ -10,6 +10,7 @@ import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
 import { useFavoritesStore } from '../stores/useFavoritesStore';
 import { releaseBlobUrlsExcept } from '../utils/blobUrls';
+import { getActiveLocalLxScript } from '../utils/lxLocalScripts';
 
 /** SongItem(搜索结果) → AudioTrack(播放器) */
 export function songItemToTrack(song: SongItem): AudioTrack {
@@ -25,10 +26,23 @@ export function songItemToTrack(song: SongItem): AudioTrack {
   };
 }
 
-/** 解析播放地址（服务端 VIP 分流：VIP 先官方后解析，非 VIP 先解析后官方）
+/** 解析播放地址。
+ *  ① 用户本地 LX 脚本优先（脚本存于浏览器 localStorage，解析时随请求到服务端一次性沙盒执行，不落服务器存储）；
+ *  ② 降级服务端链路：内置音源 + VIP 分流（VIP 先官方后解析，非 VIP 先解析后官方）
  *  fresh=true 绕过服务端成功缓存重新解析，用于播放失败重试（缓存的时效直链可能已过期） */
 async function resolveTrackUrl(id: string, fresh = false): Promise<{ url: string; trial?: boolean; quality?: string } | null> {
   const { quality } = useUIStore.getState();
+  const local = getActiveLocalLxScript();
+  if (local) {
+    try {
+      const r = await musicApi.resolveWithLocalScript(local.script, id, quality, fresh);
+      if (r.success && r.data?.url) {
+        return { url: r.data.url, trial: false, quality: r.data.quality };
+      }
+    } catch {
+      // 本地脚本解析失败 → 降级服务端链路（内置音源兜底），不打断播放
+    }
+  }
   const { user } = useUserStore.getState();
   try {
     const response = await musicApi.getSongUrl(id, quality, !!user?.vip, fresh);

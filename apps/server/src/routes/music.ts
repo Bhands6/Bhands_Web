@@ -1,7 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
+import crypto from 'node:crypto';
 import { resolveSongUrl } from '../services/musicParser';
-import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners, canAddScript } from '../services/music-sources/lxMusicRunner';
+import { initRunner, setActiveRunner, removeRunner, listRunners as listLxRunners, canAddScript, resolveWithScriptOnce, isBuiltinRunner } from '../services/music-sources/lxMusicRunner';
 import { getNeteaseCookie } from '../neteaseSession';
 import { assertAdmin } from '../adminAuth';
 import { limitedByIp } from '../rateLimit';
@@ -274,8 +275,89 @@ export async function musicRoutes(fastify: FastifyInstance) {
     if (!assertAdmin(request, reply)) return;
     const { id } = request.body as { id?: string };
     if (!id) return reply.status(400).send({ success: false, error: '缺少脚本 ID' });
+    if (isBuiltinRunner(id)) return reply.status(400).send({ success: false, error: '内置音源不可删除' });
     removeRunner(id);
     return { success: true };
+  });
+
+  // ---- 访客本地脚本的一次性解析（脚本随请求携带，服务端不留副本）----
+
+  interface LxResolveBody { script?: string; id?: string; quality?: string; fresh?: string | boolean; }
+  interface LxResolveData { url: string; quality: string; source: string; trial: boolean; size: number; }
+
+  // 成功缓存：key 含脚本指纹（同一脚本+歌曲+档位 10 分钟内复用，省掉每次播放的沙盒冷启动）
+  const lxResolveCache = new Map<string, { data: LxResolveData; time: number }>();
+  const lxResolveFailed = new Map<string, number>();
+
+  fastify.post('/parse/lx/resolve', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { script, id, quality = 'exhigh', fresh } = (request.body || {}) as LxResolveBody;
+    if (!script || typeof script !== 'string') {
+      return reply.status(400).send({ success: false, error: '缺少脚本内容' });
+    }
+    if (script.length > 512_000) {
+      return reply.status(400).send({ success: false, error: '脚本过大（上限 500KB）' });
+    }
+    if (!id || typeof id !== 'string') {
+      return reply.status(400).send({ success: false, error: '缺少歌曲 ID' });
+    }
+    // 一次性沙盒要冷启动 worker（脚本 init ~1s CPU），2C 服务器必须收紧频控
+    if (!limitedByIp(request, 'lxresolve', 20, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+
+    const tier = QUALITY_TIERS.has(quality) ? quality : 'exhigh';
+    const key = crypto.createHash('md5').update(script).digest('hex').slice(0, 12) + `_${id}_${tier}${fresh ? '_f' : ''}`;
+    const now = Date.now();
+    if (!fresh) {
+      const hit = lxResolveCache.get(key);
+      if (hit && now - hit.time < 10 * 60_000) return { success: true, data: hit.data };
+      const failedAt = lxResolveFailed.get(key);
+      if (failedAt && now - failedAt < 60_000) {
+        return reply.status(404).send({ success: false, error: '该脚本此前解析失败，请稍后重试或更换脚本' });
+      }
+    }
+
+    // 元数据预取：kw 等按歌名匹配的通道缺 name/artists/时长会失效或匹配到错版本
+    let name = '';
+    let artists: string[] = [];
+    let detail: any;
+    try {
+      const res = await NcmApi.song_detail({ ids: id, cookie: getNeteaseCookie(request) });
+      detail = res.body?.songs?.[0];
+      if (detail) {
+        name = detail.name || '';
+        artists = (detail.ar || []).map((a: any) => a.name).filter(Boolean);
+      }
+    } catch { /* 元数据拉取失败不阻塞解析，脚本按缺省信息降级 */ }
+
+    try {
+      const r = await resolveWithScriptOnce(script, {
+        id,
+        name,
+        artists: artists.join('、'),
+        album: (detail?.al || {}).name || '',
+        duration: detail?.dt || 0,
+        quality: tier
+      });
+      if (r?.url) {
+        // 外站直链统一转同源流代理（与 musicParser.PROXY 同款，外站 CDN 无 CORS 头）
+        const data: LxResolveData = {
+          url: /^https?:\/\//i.test(r.url) ? `/api/music/stream?url=${encodeURIComponent(r.url)}` : r.url,
+          quality: r.quality,
+          source: r.source,
+          trial: false,
+          size: 0
+        };
+        lxResolveCache.set(key, { data, time: Date.now() });
+        if (lxResolveCache.size > 1000) lxResolveCache.clear();
+        return { success: true, data };
+      }
+      lxResolveFailed.set(key, Date.now());
+      return reply.status(404).send({ success: false, error: '脚本未能解析出可用播放源' });
+    } catch (err: any) {
+      lxResolveFailed.set(key, Date.now());
+      return reply.status(500).send({ success: false, error: err?.message || '脚本解析失败' });
+    }
   });
 
   // 获取歌词

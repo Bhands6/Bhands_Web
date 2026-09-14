@@ -46,6 +46,11 @@ export const musicApi = {
     return apiClient.get(`/music/song/${id}/url`, { params: { quality, vip, ...(fresh ? { fresh: 1 } : {}) } });
   },
 
+  /** 本地脚本一次性解析：脚本存于用户浏览器，随请求带到服务端沙盒执行（不落服务器存储） */
+  async resolveWithLocalScript(script: string, id: string, quality = 'exhigh', fresh = false): Promise<ApiResponse<SongUrlData>> {
+    return apiClient.post('/music/parse/lx/resolve', { script, id, quality, ...(fresh ? { fresh: 1 } : {}) });
+  },
+
   async getLyrics(id: string): Promise<ApiResponse<LyricsData>> {
     return apiClient.get(`/music/song/${id}/lyric`);
   },

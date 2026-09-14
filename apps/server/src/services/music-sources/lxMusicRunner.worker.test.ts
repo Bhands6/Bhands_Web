@@ -3,11 +3,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  initRunner,
-  parseFromLxMusic,
-  listRunners
-} from './lxMusicRunner';
 
 /**
  * 2026-09-11 扫描遗留项的回归锁：lxMusicRunner 已整体迁入 worker_threads ——
@@ -16,8 +11,11 @@ import {
  *  ③ 沙盒 HTTP 有内网 SSRF 黑名单（127.0.0.1/内网段不可访问）。
  * timeout 用 LX_CALL_TIMEOUT_MS / LX_INIT_TIMEOUT_MS 压短，整文件 < 10s。
  *
- * ⚠️ lxMusicRunner 在模块顶层用 DATA_DIR 定位存档文件 —— 必须先把 DATA_DIR 指到临时目录
- *    再动态 import，避免测试把假脚本写进真实 data/lx-scripts.json。
+ * ⚠️ lxMusicRunner 在模块顶层用 DATA_DIR 定位存档文件与内置目录 —— 必须先把 DATA_DIR
+ *    指到临时目录再动态 import。⚠️ 本文件**禁止静态 import 被测模块**：ESM 静态 import
+ *    会在 beforeAll 之前求值，模块顶层常量（SCRIPTS_FILE/BUILTIN_DIR）将定位到真实
+ *    data 目录，且动态 import 只会拿到同一缓存实例 —— 2026-09-14 曾因此让 builtin/迁移
+ *    用例全部错位（读写打到了仓库真实 data/ 上）。
  */
 
 let tmpDir: string;
@@ -130,8 +128,64 @@ describe('lxMusicRunner worker 沙盒', () => {
   }, 15_000);
 
   it('脚本管理登记表：listRunners / removeRunner', async () => {
-    expect(listRunners().length).toBeGreaterThanOrEqual(4);
+    expect(mod.listRunners().length).toBeGreaterThanOrEqual(4);
     mod.removeRunner('t-fixed');
     expect(mod.listRunners().some((r) => r.id === 't-fixed')).toBe(false);
+  });
+});
+
+describe('内置音源与一次性脚本解析（2026-09-14 本地脚本架构）', () => {
+  it('一次性解析：返回 URL 且不进 runner 表、不落存档', async () => {
+    const r = await mod.resolveWithScriptOnce(EVENT_FIXED, { id: '10', name: 'a', artists: 'b', duration: 200000, quality: 'standard' });
+    expect(r?.url).toBe('http://example.com/fixed.mp3');
+    expect(r?.source).toBe('lx-wy');
+    // 一次性 runner 不注册进 runner 表（服务器不留副本）
+    expect(mod.listRunners().some((x) => x.id.startsWith('once-'))).toBe(false);
+    const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, 'lx-scripts.json'), 'utf8'));
+    expect(JSON.stringify(saved)).not.toContain('once-');
+  }, 15_000);
+
+  it('一次性解析：死循环脚本安全返回 null（随 worker 销毁）', async () => {
+    const r = await mod.resolveWithScriptOnce(EVENT_LOOP, { id: '11', name: 'a', artists: 'b', duration: 200000, quality: 'standard' });
+    expect(r).toBeNull();
+  }, 20_000);
+
+  it('内置音源：不进列表/存档，删除被拒绝', async () => {
+    const builtinDir = path.join(tmpDir, 'lx-builtin');
+    fs.mkdirSync(builtinDir, { recursive: true });
+    fs.writeFileSync(path.join(builtinDir, 'wy.js'), EVENT_FIXED, 'utf8');
+    const count = await mod.loadPersistedScripts();
+    expect(count).toBeGreaterThanOrEqual(1);
+    // 不出现在列表（UI 不可见）
+    expect(mod.listRunners().some((r) => r.id === 'builtin-wy')).toBe(false);
+    // 存档 JSON 不含内置条目
+    const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, 'lx-scripts.json'), 'utf8'));
+    expect(JSON.stringify(saved)).not.toContain('builtin-wy');
+    // 删除被拒（防御）：删后仍不在列表，且再次解析仍可用
+    mod.removeRunner('builtin-wy');
+    expect(mod.listRunners().some((r) => r.id === 'builtin-wy')).toBe(false);
+  }, 20_000);
+
+  it('删光用户脚本后，内置音源仍可作为活跃兜底解析', async () => {
+    for (const id of mod.listRunners().map((r) => r.id)) mod.removeRunner(id);
+    expect(mod.listRunners()).toHaveLength(0);
+    const r = await mod.parseFromLxMusic({ id: '12', name: 'a', artists: 'b', duration: 200000, quality: 'standard' });
+    expect(r?.url).toBe('http://example.com/fixed.mp3');
+  }, 15_000);
+
+  it('迁移：内置就位时历史存档备份并清空', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'lx-scripts.json'),
+      JSON.stringify({ scripts: [{ id: 'old1', name: '旧脚本', script: EVENT_FIXED }], activeId: 'old1' }),
+      'utf8'
+    );
+    const count = await mod.loadPersistedScripts();
+    expect(count).toBeGreaterThanOrEqual(1);
+    const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, 'lx-scripts.json'), 'utf8'));
+    expect(saved.scripts).toEqual([]);
+    expect(saved.activeId).toBeNull();
+    const files = fs.readdirSync(tmpDir);
+    expect(files.some((f) => f.startsWith('lx-scripts.json.bak-'))).toBe(true);
+    expect(mod.listRunners().some((r) => r.id === 'old1')).toBe(false);
   });
 });

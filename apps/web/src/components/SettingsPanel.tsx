@@ -9,6 +9,14 @@ import {
   LYRIC_OFFSET_LIMIT,
   LYRIC_BACKDROP_MAX
 } from '../stores/useSettingsStore';
+import {
+  addLocalLxScript,
+  getActiveLocalLxScript,
+  listLocalLxScripts,
+  removeLocalLxScript,
+  setActiveLocalLxScript,
+  LocalLxScript
+} from '../utils/lxLocalScripts';
 
 /** 滑块行（复用桌面版 .fx-slider 样式） */
 function SliderRow({
@@ -125,41 +133,16 @@ const HOTKEY_INFO: { keys: string; desc: string }[] = [
  * 鼠标完全离开「面板 + FAB」热区才收回（含容差与拖动保护）
  */
 /** LX Music 脚本管理子组件 */
-const ADMIN_TOKEN_KEY = 'bhands-admin-token';
-
-function getAdminToken(): string {
-  try { return localStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { return ''; }
-}
-
-/** 带管理令牌的写操作请求：401 时弹窗索取令牌并重试一次（令牌对应服务器 .env 的 ADMIN_TOKEN） */
-async function adminPost(url: string, body: unknown): Promise<any> {
-  const post = (token: string) => fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { 'x-admin-token': token } : {}) },
-    body: JSON.stringify(body)
-  });
-  let res = await post(getAdminToken());
-  if (res.status === 401) {
-    const input = window.prompt('此操作需要服务器管理令牌（部署时 .env 中的 ADMIN_TOKEN）：');
-    if (input === null) return { success: false, error: '已取消' };
-    const token = input.trim();
-    try { localStorage.setItem(ADMIN_TOKEN_KEY, token); } catch {}
-    res = await post(token);
-  }
-  return res.json().catch(() => ({ success: false, error: '响应解析失败' }));
-}
-
 function LxMusicSection() {
-  const [scripts, setScripts] = useState<{ id: string; sources: string[]; active: boolean }[]>([]);
+  const [scripts, setScripts] = useState<LocalLxScript[]>([]);
+  const [activeId, setActiveId] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch('/api/music/parse/lx/list');
-      const data = await res.json();
-      if (data.success) setScripts(data.data || []);
-    } catch {}
+  const refresh = useCallback(() => {
+    const list = listLocalLxScripts();
+    setScripts(list);
+    setActiveId(getActiveLocalLxScript()?.id || '');
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -171,32 +154,52 @@ function LxMusicSection() {
     setLoading(true);
     try {
       const script = await file.text();
-      const data = await adminPost('/api/music/parse/lx/upload', { script, name: file.name.replace(/\.js$/, '') });
-      if (data.success) await refresh();
-      else alert(data.error || '上传失败');
-    } catch { alert('上传失败'); }
+      const r = addLocalLxScript(file.name.replace(/\.js$/, ''), script);
+      if (!r.ok) alert(r.error || '保存失败');
+      refresh();
+    } catch { alert('读取文件失败'); }
     setLoading(false);
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  const handleDelete = async (id: string) => {
-    await adminPost('/api/music/parse/lx/delete', { id });
-    await refresh();
+  const handleDelete = (id: string) => {
+    removeLocalLxScript(id);
+    refresh();
+  };
+
+  const handleActivate = (id: string) => {
+    setActiveLocalLxScript(id);
+    refresh();
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'rgba(255,255,255,.38)' }}>
+        脚本只保存在你的浏览器本地，不会上传到服务器；播放时优先使用本地脚本，服务器内置音源始终可用。
+        点击条目切换活跃脚本。
+      </div>
       {scripts.map((s) => (
-        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+        <div
+          key={s.id}
+          onClick={() => handleActivate(s.id)}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0', cursor: 'pointer' }}
+          title="点击设为活跃脚本"
+        >
           <span style={{ flex: 1, color: 'rgba(255,255,255,.7)' }}>
-            {s.sources.join(', ') || s.id}
-            {s.active && <span style={{ color: '#4ade80', marginLeft: 6 }}>● 活跃</span>}
+            {s.name}
+            {s.id === activeId && <span style={{ color: '#4ade80', marginLeft: 6 }}>● 活跃</span>}
           </span>
-          <button className="fx-mini-btn" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => handleDelete(s.id)}>删除</button>
+          <button
+            className="fx-mini-btn"
+            style={{ fontSize: 10, padding: '2px 8px' }}
+            onClick={(e) => { e.stopPropagation(); handleDelete(s.id); }}
+          >
+            删除
+          </button>
         </div>
       ))}
       <label style={{ cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,.5)', padding: '6px 0' }}>
-        {loading ? '上传中…' : '+ 上传 .js 脚本'}
+        {loading ? '上传中…' : '+ 上传 .js 脚本（仅存本机）'}
         <input ref={fileRef} type="file" accept=".js" style={{ display: 'none' }} onChange={handleUpload} />
       </label>
     </div>
