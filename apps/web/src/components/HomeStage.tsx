@@ -53,10 +53,8 @@ export default function HomeStage() {
   const toplistLoadedRef = useRef(false);
 
   useEffect(() => {
-    // 首访（未登录且未激活免登录）保持锁定样式，不拉数据；
-    // 登录 或 点「不登录听歌」后才开始预载（ref 防重，登录态切换不重复拉）
-    const unlockedNow = loggedIn || guestUnlocked;
-    if (!unlockedNow) return;
+    // 仅登录后预载榜单（免登录模式不显示榜单横栏，也不拉数据）
+    if (!loggedIn) return;
     let cancelled = false;
     const preload = () => {
       if (toplistLoadedRef.current) return;
@@ -99,7 +97,7 @@ export default function HomeStage() {
       }
     });
     return () => { cancelled = true; unsub(); };
-  }, [loggedIn, guestUnlocked]);
+  }, [loggedIn]);
 
   // 天气（城市记忆在本地，默认上海）
   const [city, setCity] = useState(() => readString(WEATHER_CITY_KEY) || '上海');
@@ -646,7 +644,8 @@ export default function HomeStage() {
           </div>
         )}
 
-        {/* 榜单横栏（桌面版同款：5 大榜单队列式卡片） */}
+        {/* 榜单横栏（桌面版同款：5 大榜单队列式卡片；免登录模式不显示，登录后可见） */}
+        {(loggedIn || !guestUnlocked) && (
         <div className="home-rail">
           <div className="home-section-head">
             <div className="home-section-title">
@@ -694,6 +693,7 @@ export default function HomeStage() {
             ))}
           </div>
         </div>
+        )}
       </div>
     </section>
   );
