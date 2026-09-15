@@ -1252,7 +1252,8 @@ void main(){
           float mcs = cos(mang);
           float msn = sin(mang);
           pos.xy = mcenter + mat2(mcs, -msn, msn, mcs) * (pos.xy * scl);
-          pos.z *= scl;
+          // z 空间游动（像水母花）：前后漂移带来近大远小的透视感——「在空间里移动」而非贴屏滑动
+          pos.z = pos.z * scl + sin(uGalaxyAge * (0.15 + ih * 0.11) + miniIdx * 1.37) * 1.15;
           // 小玫瑰独立显现（主玫瑰的 dist01/bloomIn 对它们无意义）：随切入 appear 渐入
           vAlpha = appear * (0.78 + 0.22 * appear) * (1.0 + uBass * 0.10);
         }
