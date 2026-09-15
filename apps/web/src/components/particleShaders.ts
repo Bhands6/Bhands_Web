@@ -144,7 +144,8 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define ROSE_WRAP_FADE 0.06   // 参数域边缘渐隐带宽（占 a 域比例）
 // 花冠涡旋的轴心（花冠投影质心，采样测定）：花冠显现 dist01 的径向基准。
 // 叶子已移除（用户定稿）：叶粒子随花冠走投影路径，构成完整剪影。
-#define ROSE_LEAF_CENTER vec2(325.0, 210.0)
+#define ROSE_LEAF_CENTER vec2(325.0, 210.0) // 花冠轴心（质心采样测定）：花冠放大与绽放 dist01 的基准
+#define ROSE_CROWN_SCALE 1.22  // 花冠整体放大系数（花瓣更显眼，茎/萼比例不变）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1178,6 +1179,12 @@ void main(){
       float psc = ROSE_SIZE / pz;
       float pxs = rp.x * psc + 320.0;
       float pys = rp.y * psc + 240.0;
+      // 花冠整体放大：cc≤37 的花瓣区域以花冠轴心为基准放大（花更显眼，茎/萼比例不变）。
+      // 必须在出框检测之前——放大后的位置也要参与出框判定。
+      if (cc <= 37.0) {
+        pxs = ROSE_LEAF_CENTER.x + (pxs - ROSE_LEAF_CENTER.x) * ROSE_CROWN_SCALE;
+        pys = ROSE_LEAF_CENTER.y + (pys - ROSE_LEAF_CENTER.y) * ROSE_CROWN_SCALE;
+      }
       // 出框粒子隐藏（原版逐点 continue；实测 9.6%）
       float inFrame = step(0.0, pxs) * step(pxs, ROSE_SCREEN_W) * step(0.0, pys) * step(pys, ROSE_SCREEN_H);
       if (inFrame < 0.5) {
@@ -1260,8 +1267,9 @@ void main(){
       // 呼吸已由分支内 breath 相位承担，刻意不接 uBeat（拍点会让整朵齐闪）。
       vBright = 0.92 + maxRippleAmp * 0.60 + uBass * 0.05 + uEnergy * 0.04;
     } else if (uPreset > 11.5) {
-      // 玫瑰（ROSE）：红粉光感靠低 alpha + Additive 叠层，亮度增益保持克制
-      vBright = 0.96 + maxRippleAmp * 0.50 + uBass * 0.06 + uEnergy * 0.04;
+      // 玫瑰（ROSE）：红粉光感靠低 alpha + Additive 叠层，亮度增益保持克制。
+      // 2026-09-15 base 0.96→1.18：点尺寸调小后叠加次数减少，补偿整体亮度避免花变暗。
+      vBright = 1.18 + maxRippleAmp * 0.50 + uBass * 0.06 + uEnergy * 0.04;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -1298,7 +1306,8 @@ void main(){
   } else if (uPreset > 11.5) {
     // 玫瑰（ROSE）：细点花瓣质感，尺寸小而均匀（原版是 1px 点云），微接低音；
     // 上限收紧——点大了花瓣的「丝绒」细节会糊成一团颗粒。
-    sz = clamp(depthSize * 0.62 * (1.0 + uBass * 0.10 + uMid * 0.06), 0.55, 2.60);
+    // 2026-09-15 用户调优：点更小（0.62→0.44）观感更细密；下限/上限同步收紧。
+    sz = clamp(depthSize * 0.44 * (1.0 + uBass * 0.10 + uMid * 0.06), 0.40, 1.85);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。
