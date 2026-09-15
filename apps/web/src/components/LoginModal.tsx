@@ -25,6 +25,7 @@ export default function LoginModal() {
   const user = useUserStore((s) => s.user);
   const logout = useUserStore((s) => s.logout);
   const refreshPlaylists = useUserStore((s) => s.refreshPlaylists);
+  const setGuestUnlocked = useUserStore((s) => s.setGuestUnlocked);
 
   const [qrImg, setQrImg] = useState('');
   const [phase, setPhase] = useState<QrPhase>('creating');
@@ -171,7 +172,11 @@ export default function LoginModal() {
           <button className="modal-btn" onClick={() => setOpen(false)}>取消</button>
           <button
             className="modal-btn"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              // 激活免登录模式：主页开始加载榜单与热门新碟并解锁播放（内存态，刷新回到锁定样式）
+              setGuestUnlocked(true);
+              setOpen(false);
+            }}
             title="不登录也能听：榜单、热门新碟均可直接播放"
           >
             不登录听歌

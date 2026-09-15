@@ -12,9 +12,13 @@ import { useFavoritesStore } from './useFavoritesStore';
 interface UserState {
   user: UserInfo | null;
   loggedIn: boolean;
+  /** 免登录听歌模式：点登录弹窗「不登录听歌」后激活（纯内存态，刷新回到未激活）。
+   *  激活后主页加载榜单与热门新碟并解锁播放；未激活保持原锁定样式且不拉数据。 */
+  guestUnlocked: boolean;
   playlists: UserPlaylistItem[];
   playlistsLoading: boolean;
 
+  setGuestUnlocked: (v: boolean) => void;
   init: () => Promise<void>;
   loginWithQR: () => Promise<boolean>;
   loginSuccess: (user: UserInfo | null) => void;
@@ -25,8 +29,11 @@ interface UserState {
 export const useUserStore = create<UserState>((set) => ({
   user: null,
   loggedIn: false,
+  guestUnlocked: false,
   playlists: [],
   playlistsLoading: false,
+
+  setGuestUnlocked: (v) => set({ guestUnlocked: v }),
 
   init: async () => {
     try {
