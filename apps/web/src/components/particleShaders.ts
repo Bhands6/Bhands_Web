@@ -142,6 +142,9 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 会闪 —— 参数域边缘 6% 区间线性渐隐（出域前淡出、回绕后淡入）。
 #define ROSE_SPIN_DOMAIN 0.18 // 花瓣涡旋的参数域速度（原版 angle 1.8/s × 0.1 系数）
 #define ROSE_WRAP_FADE 0.06   // 参数域边缘渐隐带宽（占 a 域比例）
+// 叶子公转：c>37 的两片叶在原版里是「沿固定方向直线滑动 + 回绕弹回」（低密度下观感突兀，
+// 用户截图否决），改为绕屏幕花心缓转——与花冠涡旋呼应成「整朵在自旋」，枝干/花冠不参与。
+#define ROSE_LEAF_ORBIT 0.5   // 叶子公转角速度（rad/s，约 12.6s 一圈）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1174,6 +1177,17 @@ void main(){
       float psc = ROSE_SIZE / pz;
       float pxs = rp.x * psc + 320.0;
       float pys = rp.y * psc + 240.0;
+      // 叶子公转：两片叶（37<c≤60）绕屏幕花心缓转（枝干 c>60 / 花冠 c≤37 不参与）。
+      // 公转放在出框检测**之前**——旋转后的位置也要参与出框判定，叶子转到框外即隐藏。
+      float isLeaf = step(37.0, cc) * (1.0 - step(60.0, cc));
+      if (isLeaf > 0.5) {
+        float lr = uGalaxyAge * ROSE_LEAF_ORBIT;
+        float lc = cos(lr);
+        float ls = sin(lr);
+        vec2 rel = vec2(pxs - 320.0, pys - 240.0);
+        pxs = 320.0 + rel.x * lc - rel.y * ls;
+        pys = 240.0 + rel.x * ls + rel.y * lc;
+      }
       // 出框粒子隐藏（原版逐点 continue；实测 9.6%）
       float inFrame = step(0.0, pxs) * step(pxs, ROSE_SCREEN_W) * step(0.0, pys) * step(pys, ROSE_SCREEN_H);
       if (inFrame < 0.5) {
