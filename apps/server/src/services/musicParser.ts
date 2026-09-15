@@ -1,4 +1,5 @@
 import { parseFromGDMusic } from './music-sources/gdmusic';
+import { tryGoMusicSwitch } from './music-sources/goMusicSwitch';
 import { parseFromLxMusic, listRunners as listLxRunners } from './music-sources/lxMusicRunner';
 import { probeAudio, acceptProbe } from './durationProbe';
 
@@ -52,7 +53,7 @@ const PROXY = (url: string) => /^https?:\/\//i.test(url) ? `/api/music/stream?ur
 // ============================================================
 // 8s 而非更久：GDMusic 正常命中很快（聚合搜索 1~3s），超时基本等于上游挂了；
 // 无损档它排第一，收得太松会让每首新歌的首次解析都先白等 12s 才降级到 wy
-const GDMUSIC_TIMEOUT = 8_000;
+const GDMUSIC_TIMEOUT = 6_000;
 
 /** 用户档位 → GDMusic(酷音/joox/tidal 聚合) 的 br 参数：999=无损, 320/128=有损 */
 function gdQualityOf(tier?: string): string {
@@ -174,11 +175,31 @@ async function tryStrategies(
   strategies: Array<(p: ParseParams) => Promise<ParseResult | null>>,
   expectedMs = 0
 ): Promise<ParseResult | null> {
-  for (const fn of strategies) {
-    const r = await fn(p);
-    if (r?.url && (await acceptCandidate(r, expectedMs))) return r;
-  }
-  return null;
+  // 竞速版：全部源并发启动，第一个「成功 + 通过时长校验」的胜出即返回——
+  // 单源挂死/超时不再拖慢整条链（2026-09-15：串行版在 gdmusic 上游挂死时把解析拖到 9~15s）。
+  // 全部完成仍无校验通过者 → 宽容回落第一个成功候选（expectedMs=0 时校验恒过，行为同旧版）。
+  return new Promise((resolve) => {
+    let settled = false;
+    let pending = strategies.length;
+    let fallback: ParseResult | null = null;
+
+    strategies.forEach(async (fn) => {
+      try {
+        const r = await fn(p);
+        if (r?.url && !settled) {
+          if (await acceptCandidate(r, expectedMs)) {
+            if (!settled) { settled = true; resolve(r); }
+            return;
+          }
+          if (!fallback) fallback = r;
+        }
+      } catch {
+        // 单源异常忽略，等其他源
+      }
+      pending--;
+      if (pending === 0 && !settled) resolve(fallback);
+    });
+  });
 }
 
 /**
@@ -207,8 +228,8 @@ const LOSSLESS_TIERS = new Set(['lossless', 'hires', 'jymaster']);
 async function tryThirdParty(p: ParseParams, expectedMs = 0): Promise<ParseResult | null> {
   const losslessFirst = LOSSLESS_TIERS.has(p.quality || 'exhigh');
   const strategies: Array<(p: ParseParams) => Promise<ParseResult | null>> = losslessFirst
-    ? [(pp) => tryGDMusic(pp), (pp) => tryLxMusic(pp), (pp) => tryUnblock(pp, 5_000)]
-    : [(pp) => tryLxMusic(pp), (pp) => tryGDMusic(pp), (pp) => tryUnblock(pp, 5_000)];
+    ? [(pp) => tryGDMusic(pp), (pp) => tryLxMusic(pp), (pp) => tryGoMusicSwitch(pp), (pp) => tryUnblock(pp, 5_000)]
+    : [(pp) => tryLxMusic(pp), (pp) => tryGDMusic(pp), (pp) => tryGoMusicSwitch(pp), (pp) => tryUnblock(pp, 5_000)];
   return tryStrategies(p, strategies, expectedMs);
 }
 
