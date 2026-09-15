@@ -476,13 +476,15 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 热门新碟（网易云「新碟上架」，游客可用）——免登录模式的「每日推荐」数据源
+  // 热门新碟（网易云「新碟上架」，游客可用）——免登录模式的「每日推荐」数据源。
+  // ⚠️ 必须用 album_new（/album/new）——top_album 在当前 NcmApi 版本返回的是周/月榜
+  // （weekData/monthData，无 albums 字段），实测空数据。
   fastify.get('/top/album', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!limitedByIp(request, 'top-album', 20, 60_000)) {
       return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
     }
     try {
-      const res = await NcmApi.top_album({ limit: 10 });
+      const res = await NcmApi.album_new({ limit: 10 });
       const albums = (res.body?.albums || []).map((a: any) => ({
         id: String(a.id),
         name: a.name || '',
