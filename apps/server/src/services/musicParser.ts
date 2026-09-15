@@ -240,9 +240,14 @@ export async function resolveSongUrl(
     result = await tryNcmOfficial(p, cookie);
     if (!result) result = await tryThirdParty(p, expectedMs);
   } else {
-    // 非 VIP：① 外站解析 → ② 官方 API（试听兜底）
-    result = await tryThirdParty(p, expectedMs);
-    if (!result) result = await tryNcmOfficial(p, cookie);
+    // 非 VIP：官方优先——匿名 exhigh 实测 ~350ms 直出免费歌
+    //（2026-09-15 调整：外站源（gdmusic 上游抖动 15s 挂死、wy 脚本缺失）会拖慢每首歌）；
+    // 试听片段只记不返——继续走外站拿完整版，外站全挂才回落试听
+    result = await tryNcmOfficial(p, cookie);
+    if (!result || result.trial) {
+      const trial = result;
+      result = (await tryThirdParty(p, expectedMs)) || trial;
+    }
   }
 
   if (result) successCache.set(cacheKey, { data: result, time: Date.now() });
