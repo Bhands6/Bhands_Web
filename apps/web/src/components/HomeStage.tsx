@@ -240,13 +240,13 @@ export default function HomeStage() {
       ? withCovers[Math.floor(Math.random() * withCovers.length)].cover
       : '';
   }, [recommend, guestAlbums, loggedIn, guestUnlocked]);
-  const continueCover = loggedIn ? (history.find((t) => t.cover)?.cover || '') : '';
+  const continueCover = unlocked ? (history.find((t) => t.cover)?.cover || '') : '';
   // 天气电台封面：预取歌单的第一张封面
-  const weatherCover = loggedIn ? (radioSongs.find((s) => s.cover)?.cover || '') : '';
+  const weatherCover = unlocked ? (radioSongs.find((s) => s.cover)?.cover || '') : '';
   const artistCover = useMemo(() => {
-    if (!loggedIn || !topArtist) return '';
+    if (!unlocked || !topArtist) return '';
     return history.find((t) => (t.artist || '').includes(topArtist) && t.cover)?.cover || '';
-  }, [history, topArtist, loggedIn]);
+  }, [history, topArtist, unlocked]);
 
   // 每日推荐 / 私人电台：推荐歌曲整单播放（免登录模式改用热门新碟；未激活则引导登录弹窗）
   const playRecommend = (shuffle = false) => {
