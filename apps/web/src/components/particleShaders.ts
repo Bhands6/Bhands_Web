@@ -1248,10 +1248,8 @@ void main(){
             -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - 2.5) * 0.45
           );
           // 负号 = 与主玫瑰花瓣涡旋同向（用户验收定方向）
-          float mang = -uGalaxyAge * (0.30 + ih * 0.22) + miniIdx * 2.13;
-          float mcs = cos(mang);
-          float msn = sin(mang);
-          pos.xy = mcenter + mat2(mcs, -msn, msn, mcs) * (pos.xy * scl);
+          // 无自旋（用户定稿）：小玫瑰朝向固定正对镜头，运动只有平移漂浮 + z 空间游动
+          pos.xy = mcenter + pos.xy * scl;
           // z 空间游动（像水母花）：前后漂移带来近大远小的透视感——「在空间里移动」而非贴屏滑动
           pos.z = pos.z * scl + sin(uGalaxyAge * (0.15 + ih * 0.11) + miniIdx * 1.37) * 1.15;
           // 小玫瑰独立显现（主玫瑰的 dist01/bloomIn 对它们无意义）：随切入 appear 渐入

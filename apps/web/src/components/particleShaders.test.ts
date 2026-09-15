@@ -1112,8 +1112,10 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).toMatch(/floor\(\(bucketRnd \/ ROSE_MINI_SHARE\) \* ROSE_MINI_COUNT\) \+ 1\.0/);
     // 小玫瑰参数域用各自 hash（同公式不同粒子分布），层配额分布共用
     expect(roseCode).toMatch(/isMini \? hash11\(aRand \* 13\.1 \+ miniIdx \* 7\.3\) : aUv\.x/);
-    // 实例变换在 vAlpha 之后：位置/缩放/自旋/漂浮 + 独立 appear 渐入
-    expect(roseCode).toMatch(/pos\.xy = mcenter \+ mat2\(mcs, -msn, msn, mcs\) \* \(pos\.xy \* scl\)/);
+    // 实例变换在 vAlpha 之后：平移漂浮 + z 空间游动 + 独立 appear 渐入。
+    // 无自旋（用户定稿）：小玫瑰朝向固定正对镜头，运动只有平移 + z 游动
+    expect(roseCode).toMatch(/pos\.xy = mcenter \+ pos\.xy \* scl/);
+    expect(roseCode).not.toMatch(/mat2\(mcs/);
     expect(roseCode).toMatch(/vAlpha = appear \* \(0\.78 \+ 0\.22 \* appear\)/);
   });
 
