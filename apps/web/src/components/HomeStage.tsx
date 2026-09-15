@@ -646,41 +646,6 @@ export default function HomeStage() {
           </div>
         )}
 
-        {/* 免登录模式：推荐歌单横栏（网易官方 personalized，每次轮换，点卡片整单播放） */}
-        {!loggedIn && guestUnlocked && guestPlaylists.length > 0 && (
-          <div className="home-rail">
-            <div className="home-section-head">
-              <div className="home-section-title">推荐歌单</div>
-              <div className="home-section-note">网易官方推荐 · 每次刷新不同</div>
-            </div>
-            <div id="home-tile-row" className="home-tile-row">
-              {guestPlaylists.map((p) => (
-                <button
-                  key={p.id}
-                  className="home-tile home-tile--queue"
-                  data-home-tone="playlist"
-                  type="button"
-                  onClick={() => playGuestPlaylist(p)}
-                  title={`${p.name} · 播放 ${p.playCount} 次`}
-                >
-                  <div
-                    className={`home-tile-cover${p.cover ? ' has-cover' : ''}`}
-                    style={p.cover ? { backgroundImage: `url(${p.cover})` } : undefined}
-                  />
-                  <div className="home-tile-title">{p.name}</div>
-                  <div className="home-tile-queue">
-                    <div className="home-tile-queue-item">
-                      <span className="home-tile-queue-num">♫</span>
-                      <span className="home-tile-queue-name">官方推荐歌单</span>
-                      <span className="home-tile-queue-artist">{p.playCount > 10000 ? `${Math.round(p.playCount / 10000)}万` : p.playCount} 次播放</span>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* 榜单横栏（桌面版同款：5 大榜单队列式卡片） */}
         <div className="home-rail">
           <div className="home-section-head">
