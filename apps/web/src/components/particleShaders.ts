@@ -135,7 +135,13 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define ROSE_DEPTH_SCALE 0.0028 // 原始 z → 世界深度（薄 3D 层次，花瓣前后微透视）
 #define ROSE_DIST_NORM 300.0 // 显现排序的屏幕径向归一化半径（花心向外渐次绽放）
 #define ROSE_APPEAR  1.8    // 显现动画时长（秒，切入预设起算，ease-out cubic）
-#define ROSE_SPIN    -0.35  // 自转角速度（rad/s，投影后屏幕平面内刚体旋转；负号 = 与原版花瓣流动同向，用户截图验收定）
+// 自旋 = 原版花瓣涡旋：花形轮廓始终竖直（花冠在上茎在下），花瓣图案在轮廓内部绕花心流动。
+// ⚠️ 不要改成投影后的刚体旋转——整朵花会跟着转歪（用户截图否决）；参数域 a 平移在
+// 玫瑰 7 重对称下视觉等价「绕花心自旋」，且与原版逐式一致。
+// 回绕渐隐：粒子密度低（原版 50 万 vs 本实现 ~2 万有效点），a 域 wrap 时单点位置跳变
+// 会闪 —— 参数域边缘 6% 区间线性渐隐（出域前淡出、回绕后淡入）。
+#define ROSE_SPIN_DOMAIN 0.18 // 花瓣涡旋的参数域速度（原版 angle 1.8/s × 0.1 系数）
+#define ROSE_WRAP_FADE 0.06   // 参数域边缘渐隐带宽（占 a 域比例）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1072,7 +1078,7 @@ void main(){
   //  花瓣层 c 由 aRand 哈希离散成 46 层。无效参数域 A²+B²≥1 约 21% 粒子隐藏。
 //  观感与交互（对齐原版）：
 //  · 切入预设从花心向外渐次绽放（原版按距花心排序渐进显现，时长 ROSE_APPEAR）
-//  · 投影后屏幕平面内刚体自转——替代原版的 a 参数偏移：统计无缝但粒子会单点跳变
+//  · 自旋 = 原版花瓣涡旋（参数域 a 平移）：花形竖直不变，花瓣图案绕花心流动穿插
 //  · 颜色公式逐式移植：r=~(r*h)&0xFF 的 GLSL 等价 mod(255-trunc(v),256)
 //  · 主层 Additive（ParticleStage 门控）：黑底 + 红粉叠加出花瓣发光质感
 //  · 音频只进亮度与整体微缩放（工作流 4.7③），不接位置量
@@ -1082,9 +1088,12 @@ void main(){
     float appearRaw = clamp(uGalaxyAge / ROSE_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
 
-    float ra = aUv.x;
+    // ---- 花瓣涡旋自旋（原版做法）：a 参数域随时间平移，花瓣图案绕花心流动 ----
+    float ra = fract(aUv.x + uGalaxyAge * ROSE_SPIN_DOMAIN);
     float rb = aUv.y;
     float cc = floor(hash11(aRand * 97.0) * ROSE_LAYERS) / 0.74;
+    // 参数域边缘渐隐（粒子周期性穿过 wrap 边界：出域前淡出、回绕后淡入，治低密度闪点）
+    float edgeFade = smoothstep(0.0, ROSE_WRAP_FADE, min(ra, 1.0 - ra));
 
     vec3 rp = vec3(0.0);
     float rC = 0.0;
@@ -1178,12 +1187,6 @@ void main(){
           (pz - 888.0) * ROSE_DEPTH_SCALE
         );
 
-        // ---- 屏幕平面内刚体自转（绕 z）----
-        float rotZ = uGalaxyAge * ROSE_SPIN;
-        float cs_ = cos(rotZ);
-        float sn_ = sin(rotZ);
-        pos.xy = mat2(cs_, -sn_, sn_, cs_) * pos.xy;
-
         // ---- 节拍微缩放 + 显现（花心向外渐次绽放，屏幕径向排序同原版）----
         pos *= 1.0 + uBeat * 0.03;
         float dist01 = clamp(length(vec2(pxs - 320.0, pys - 240.0)) / ROSE_DIST_NORM, 0.0, 1.0);
@@ -1194,8 +1197,8 @@ void main(){
         float gc = mod(255.0 - trunc(gC * ROSE_H), 256.0) / 255.0;
         float bc = mod(255.0 - trunc(rC * rC * -80.0), 256.0) / 255.0;
         vColor = vec3(rc, gc, bc);
-        // 显现期按 bloomIn 淡入；音频只进亮度（工作流 4.7③）
-        vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10);
+        // 显现期按 bloomIn 淡入；边缘渐隐治涡旋回绕闪点；音频只进亮度（工作流 4.7③）
+        vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10) * edgeFade;
         maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uMid * 0.03);
       }
     }

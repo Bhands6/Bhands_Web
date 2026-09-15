@@ -1077,10 +1077,15 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(bad, `发现未包裹底数的 pow：${bad === null ? '' : bad.join(' | ')}`).toBeNull();
   });
 
-  it('显现（从花心向外渐次绽放）与刚体自转必须齐备，相位从切入预设起算', () => {
+  it('花瓣涡旋自旋（原版做法）必须齐备：参数域平移 + 回绕渐隐，相位从切入预设起算', () => {
     expect(roseCode).toMatch(/uGalaxyAge \/ ROSE_APPEAR/);
     expect(roseCode).toMatch(/1\.0 - pow\(1\.0 - appearRaw, 3\.0\)/);
-    expect(roseCode).toMatch(/uGalaxyAge \* ROSE_SPIN/);
+    // 自旋 = 参数域 a 平移（花形竖直、花瓣图案流动），不是刚体旋转（整朵会转歪，用户截图否决）
+    expect(roseCode).toMatch(/fract\(aUv\.x \+ uGalaxyAge \* ROSE_SPIN_DOMAIN\)/);
+    expect(roseCode).not.toMatch(/mat2\(cs_/);
+    // 回绕渐隐：参数域边缘 6% 线性淡出，治低密度下的跳变闪点
+    expect(roseCode).toMatch(/smoothstep\(0\.0, ROSE_WRAP_FADE, min\(ra, 1\.0 - ra\)\)/);
+    expect(roseCode).toMatch(/edgeFade/);
     expect(roseCode).toMatch(/bloomIn/);
   });
 
