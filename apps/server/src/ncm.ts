@@ -1,4 +1,8 @@
-import NcmApiDefault from 'NeteaseCloudMusicApi';
+// NeteaseCloudMusicApi 的社区延续维护版（原版 Binaryify 2024 年停更，此版跟进网易接口变更）
+import NcmApiDefault from '@neteasecloudmusicapienhanced/api';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 /**
  * 带超时的网易云 API 客户端。
@@ -55,3 +59,31 @@ export const NcmApi = new Proxy(raw, {
     return (query?: any) => callWithRetry(fn, query);
   }
 });
+
+// ============================================================
+// xeapi public key 预注册（Enhanced 版切换的适配，2026-09-15）
+//
+// 网易新协议（xeapi）要求先调反爬密钥接口拿 public key（含 sk），后续 song_url 等
+// 接口用它加密。Enhanced 库的 request.js **只读** os.tmpdir()/xeapi_public_key 文件、
+// 从不写入（写文件的步骤留给部署方——HTTP 服务方式部署时由文档/脚本完成），
+// 我们直接 import 模块所以无人做这一步 → 官方路径报 'xeapi public key is missing'。
+//
+// 修复：启动时调 register_xeapikey 拿 key 并落盘；失败静默（官方路径降级，外站竞速兜底）。
+// 文件一旦存在 request.js 会自动加载并模块内缓存，无需重启。
+// ============================================================
+const XEAPI_KEY_PATH = path.resolve(os.tmpdir(), './xeapi_public_key');
+
+export async function ensureXeapiKey(): Promise<boolean> {
+  try {
+    if (fs.existsSync(XEAPI_KEY_PATH)) return true;
+    const res = await withTimeout((raw as any).register_xeapikey({}), NCM_TIMEOUT_MS, 'xeapi注册') as { body?: { sk?: string } };
+    const body = res?.body;
+    if (!body?.sk) return false;
+    fs.writeFileSync(XEAPI_KEY_PATH, JSON.stringify(body), 'utf-8');
+    console.log('[NCM] xeapi public key 已注册落盘（官方新协议可用）');
+    return true;
+  } catch (e) {
+    console.warn('[NCM] xeapi public key 注册失败（官方路径降级，外站兜底）:', (e as Error).message);
+    return false;
+  }
+}

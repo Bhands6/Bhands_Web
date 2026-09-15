@@ -19,7 +19,7 @@
     "@unblockneteasemusic/server": "^0.28.0",
     "axios": "^1.18.1",
     "fastify": "^4.0.0",
-    "NeteaseCloudMusicApi": "^4.32.0"
+    "@neteasecloudmusicapienhanced/api": "^4.40.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

@@ -13,6 +13,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { musicRoutes } from './routes/music';
 import { loadPersistedScripts } from './services/music-sources/lxMusicRunner';
+import { ensureXeapiKey } from './ncm';
 import { loadPersistedSessions } from './neteaseSession';
 import { userRoutes } from './routes/user';
 import { weatherRoutes } from './routes/weather';
@@ -105,6 +106,9 @@ async function main() {
 
     // 启动时加载已持久化的 LX Music 脚本
     loadPersistedScripts().then((n) => { if (n) console.log(`[LxMusic] 已加载 ${n} 个持久化脚本`); }).catch(() => {});
+
+    // xeapi public key 预注册（Enhanced 版适配：网易新协议密钥落盘，失败静默走外站兜底）
+    ensureXeapiKey().catch(() => {});
 
     // 登录会话持久化：仅 SESSION_PERSIST=on 时启用（部署默认关闭，磁盘不留登录凭据）
     if (sessionPersistEnabled()) {
