@@ -885,7 +885,7 @@ export default function ParticleStage() {
     };
     animate();
 
-    console.log(`[particles] desktop shader stage ready, grid=${grid}x${grid}, preset=${uniforms.uPreset.value}`);
+    console.log(`[particles] desktop shader stage ready, grid=${activeGrid}x${activeGrid}, preset=${uniforms.uPreset.value}`);
 
     return () => {
       disposed = true;
