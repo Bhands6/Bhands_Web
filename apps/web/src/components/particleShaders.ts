@@ -1212,9 +1212,11 @@ void main(){
         float bloomIn = clamp((appear * 1.25 - dist01) * 5.0, 0.0, 1.0);
 
         // ---- 颜色：v 整数时 ~(v)&0xFF = mod(255-v, 256)（先 trunc 再取模，GLSL mod 恒非负）----
-        float rc = mod(255.0 - trunc(rC * ROSE_H), 256.0) / 255.0;
-        float gc = mod(255.0 - trunc(gC * ROSE_H), 256.0) / 255.0;
-        float bc = mod(255.0 - trunc(rC * rC * -80.0), 256.0) / 255.0;
+        // ⚠️ trunc 在 GLSL ES 1.00 不存在（部分 ANGLE 版本宽松接受，浏览器/驱动更新后编译失败），
+        //    用精确等价式 sign(x)*floor(abs(x))（向零取整，含负数与 0）。
+        float rc = mod(255.0 - sign(rC * ROSE_H) * floor(abs(rC * ROSE_H)), 256.0) / 255.0;
+        float gc = mod(255.0 - sign(gC * ROSE_H) * floor(abs(gC * ROSE_H)), 256.0) / 255.0;
+        float bc = mod(255.0 - sign(rC * rC * -80.0) * floor(abs(rC * rC * -80.0)), 256.0) / 255.0;
         vColor = vec3(rc, gc, bc);
         // 显现期按 bloomIn 淡入；边缘渐隐治涡旋回绕闪点；音频只进亮度（工作流 4.7③）
         vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10) * edgeFade;

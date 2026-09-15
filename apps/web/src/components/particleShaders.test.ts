@@ -1061,8 +1061,10 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).toMatch(/else \{/);
   });
 
-  it('颜色公式逐式移植：r/g/b = mod(255 - trunc(v), 256)/255（~&0xFF 的 GLSL 等价）', () => {
-    const hits = roseCode.match(/mod\(255\.0 - trunc\([^)]+\), 256\.0\) \/ 255\.0/g);
+  it('颜色公式逐式移植：mod(255 - sign(x)*floor(abs(x)), 256)/255（trunc 的 GLSL ES 1.00 兼容等价式）', () => {
+    // trunc 在 GLSL ES 1.00 不存在（部分 ANGLE 宽松接受，浏览器更新后编译失败）——禁止再用 trunc
+    expect(roseCode.includes('trunc('), '玫瑰分支不得使用 trunc（1.00 兼容性）').toBe(false);
+    const hits = roseCode.match(/mod\(255\.0 - sign\([^)]+\) \* floor\(abs\([^)]+\)\), 256\.0\) \/ 255\.0/g);
     expect(hits, '颜色公式应有 3 处（r/g/b，叶子移除后仅投影路径一套）').toBeTruthy();
     expect(hits!.length).toBe(3);
   });
