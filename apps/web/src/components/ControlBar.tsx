@@ -24,6 +24,7 @@ const QUALITY_OPTIONS: { key: PlayQuality; label: string; note: string }[] = [
 function deriveSourceTag(q: string): string {
   if (!q) return '';
   if (q.startsWith('gdmusic')) return 'GD';
+  if (q.startsWith('gomusic')) return 'GM';
   if (q.startsWith('lx')) return 'LX';
   if (q === 'unblock') return 'UC';
   if (q.startsWith('netease-')) return 'NCM';
