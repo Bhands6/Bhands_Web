@@ -145,15 +145,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   
   // 上一首
   prevTrack: () => {
-    const { playlist, currentIndex, playMode, currentTime } = get();
+    const { playlist, currentIndex, playMode } = get();
     if (playlist.length === 0) return;
 
-    // 播放超过 3 秒时回到本曲开头（常见播放器行为）
-    if (currentTime > 3) {
-      get().seek(0);
-      return;
-    }
-    
+    // 2026-09-15 用户定稿：去掉「播放超 3 秒点上一首 = 回到本曲开头」的规则
+    //（主流播放器的防误触设计）。预解析下一首上线后，用户习惯等预解析完成再点
+    // 上一首——必然已超 3 秒，重播行为违背预期。想重听当前曲用进度条拖回开头。
     let prevIndex: number;
     
     switch (playMode) {
