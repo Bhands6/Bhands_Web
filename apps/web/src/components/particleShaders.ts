@@ -1245,7 +1245,8 @@ void main(){
             side * (4.25 + ih * 0.9),
             -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - 2.5) * 0.45
           );
-          float mang = uGalaxyAge * (0.30 + ih * 0.22) + miniIdx * 2.13;
+          // 负号 = 与主玫瑰花瓣涡旋同向（用户验收定方向）
+          float mang = -uGalaxyAge * (0.30 + ih * 0.22) + miniIdx * 2.13;
           float mcs = cos(mang);
           float msn = sin(mang);
           pos.xy = mcenter + mat2(mcs, -msn, msn, mcs) * (pos.xy * scl);
