@@ -1212,7 +1212,9 @@ void main(){
       float leafOrb = uGalaxyAge * ROSE_LEAF_ORBIT;
       float oc = cos(leafOrb);
       float os2 = sin(leafOrb);
-      blade.xz = mat2(oc, -os2, os2, oc) * blade.xz;
+      // ⚠️ 绕根旋转必须在**屏幕平面（xy）内**：绕竖直轴（xz）转会让叶子侧面朝向观众、
+      //    叶形塌成一条侧棱（用户截图否决）。billboard 式——任何角度都是完整叶形。
+      blade.xy = mat2(oc, -os2, os2, oc) * blade.xy;
       pos = anchor + blade;
       // 颜色（原公式，静态 ua 代入）
       float w1 = ub * ROSE_H;
