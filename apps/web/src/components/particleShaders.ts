@@ -142,12 +142,8 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 会闪 —— 参数域边缘 6% 区间线性渐隐（出域前淡出、回绕后淡入）。
 #define ROSE_SPIN_DOMAIN 0.18 // 花瓣涡旋的参数域速度（原版 angle 1.8/s × 0.1 系数）
 #define ROSE_WRAP_FADE 0.06   // 参数域边缘渐隐带宽（占 a 域比例）
-// 真 3D 叶子：c>37 的两片叶不走投影压平，用原始 3D 坐标构建实体叶片
-//（用户迭代：平面公转版叶子「旋转轴不对/无立体感」→ 3D 化）。动画全在姿态层：
-// roll 翻转（叶面朝向摆动）+ 绕茎（世界 y 轴）公转——转到花后近小、花前近大（真透视）。
-#define ROSE_LEAF_ORBIT 0.5   // 叶子绕茎公转角速度（rad/s，约 12.6s 一圈）
-#define ROSE_LEAF_SCALE 0.0052 // 叶子原始 3D 坐标 → 世界缩放（叶长约 1.8 世界单位）
-// 花冠涡旋的轴心（花冠投影质心，采样测定）：花冠显现 dist01 的径向基准
+// 花冠涡旋的轴心（花冠投影质心，采样测定）：花冠显现 dist01 的径向基准。
+// 叶子已移除（用户定稿）：叶粒子随花冠走投影路径，构成完整剪影。
 #define ROSE_LEAF_CENTER vec2(325.0, 210.0)
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
@@ -1171,68 +1167,11 @@ void main(){
       }
     }
 
-    // 叶子标记：cc>37 且 ≤60（cc>60 花蕊枝干、c≤37 花冠，均走投影路径）
-    float isLeafRaw = step(37.0, cc) * (1.0 - step(60.0, cc));
-
+    // 叶子已移除（用户定稿）：cc>37 的叶粒子随花冠一起走投影路径，构成完整剪影
     if (valid < 0.5) {
       // 无效参数域（约 21% 网格点）：藏到远景（同 VOID 手法），alpha 0
       pos = vec3(0.0, 0.0, -90.0);
       vAlpha = 0.0;
-    } else if (isLeafRaw > 0.5) {
-      // ==================================================
-      //  真 3D 叶子：不走投影压平，直接用原始 3D 坐标构建实体叶片。
-      //  形状参数静态化（不随花冠涡旋流动——叶子是实体，动画全在姿态层）：
-      //  · roll 翻转：横向与深度分量绕叶长轴缓慢摆动（叶面朝向变化）
-      //  · 公转：整片叶绕茎（世界 y 轴）旋转——转到花后近小、花前近大（真透视）
-      //  · 显现：从叶柄向叶梢（ua 顺序）
-      // ==================================================
-      float ua = aUv.x;
-      float ub = aUv.y;
-      float j = mod(floor(cc), 2.0);
-      float n = mix(4.0, 6.0, j);
-      // 原始 3D：沿叶长轴（dirN）伸展 o、横轴（dirW）张成 w、深度 z 挠曲（相对柄端平面）
-      float oTip = 0.5 / (ua + 0.01) + cos(ub * 125.0) * 3.0 - ua * 300.0;
-      float oBase = 0.5 / 0.02;
-      float along = oTip - oBase;
-      float across = ub * ROSE_H - 0.5 * ROSE_H;
-      float B = ub * 2.0 - 1.0;
-      float zrel = (cos(B + ua * 2.0 - 1.0) - 1.0) * 99.0;
-      vec2 dirN = vec2(cos(n), sin(n));
-      vec2 dirW = vec2(sin(n), -cos(n));
-      // roll：横向/深度绕长轴缓慢翻转
-      float roll = sin(uGalaxyAge * 0.6 + j * 2.6) * 0.6;
-      float acrossR = across * cos(roll) - zrel * sin(roll);
-      float zr = across * sin(roll) + zrel * cos(roll);
-      // 叶根钉在茎干上（固定不动）；叶片相对叶根构造后绕**过叶根的竖直轴**旋转——
-      // 叶根不脱离茎、叶梢绕根转圈（用户明确：旋转轴心 = 叶子在茎干上的根位置）
-      vec3 anchor = vec3((j * 2.0 - 1.0) * 0.08, -1.30, 0.0);
-      vec3 blade = vec3(along * dirN.x, -along * dirN.y, 0.0) * ROSE_LEAF_SCALE
-                 + vec3(acrossR * dirW.x, -acrossR * dirW.y, 0.0) * ROSE_LEAF_SCALE
-                 + vec3(0.0, 0.0, zr) * ROSE_LEAF_SCALE;
-      float leafOrb = uGalaxyAge * ROSE_LEAF_ORBIT;
-      float oc = cos(leafOrb);
-      float os2 = sin(leafOrb);
-      // ⚠️ 绕根旋转必须在**屏幕平面（xy）内**：绕竖直轴（xz）转会让叶子侧面朝向观众、
-      //    叶形塌成一条侧棱（用户截图否决）。billboard 式——任何角度都是完整叶形。
-      blade.xy = mat2(oc, -os2, os2, oc) * blade.xy;
-      pos = anchor + blade;
-      // 颜色（原公式，静态 ua 代入）
-      float w1 = ub * ROSE_H;
-      rC = 0.4 - ua * 0.1
-         + pow(clamp(1.0 - B * B, 0.0, 1.0), 1500.0) * 0.15
-         - ua * ub * 0.4
-         + cos(ua + ub) / 5.0
-         + pow(abs(cos((oTip * (ua + 1.0) + (B > 0.0 ? w1 : -w1)) / 25.0)), 30.0) * 0.1 * (1.0 - B * B);
-      gC = oTip / 1000.0 + 0.7 - oTip * w1 * 0.000003;
-      float rc = mod(255.0 - trunc(rC * ROSE_H), 256.0) / 255.0;
-      float gc = mod(255.0 - trunc(gC * ROSE_H), 256.0) / 255.0;
-      float bc = mod(255.0 - trunc(rC * rC * -80.0), 256.0) / 255.0;
-      vColor = vec3(rc, gc, bc);
-      // 显现：叶柄向叶梢（ua 顺序）；花后（z<0）稍淡拉开纵深
-      float bloomIn = clamp((appear * 1.4 - ua) * 4.0, 0.0, 1.0);
-      float depthFade = 0.82 + 0.18 * smoothstep(-1.2, 0.6, pos.z);
-      vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10) * depthFade;
-      maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uMid * 0.03);
     } else {
       // ---- 原版透视投影（⚠️ 玫瑰形状 = 投影后的 2D 剪影，必须先投影再映射世界）----
       float pz = max(rp.z, 1.0);

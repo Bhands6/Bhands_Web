@@ -1063,8 +1063,8 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
 
   it('颜色公式逐式移植：r/g/b = mod(255 - trunc(v), 256)/255（~&0xFF 的 GLSL 等价）', () => {
     const hits = roseCode.match(/mod\(255\.0 - trunc\([^)]+\), 256\.0\) \/ 255\.0/g);
-    expect(hits, '颜色公式应有 6 处（投影路径 3 + 3D 叶 3）').toBeTruthy();
-    expect(hits!.length).toBe(6);
+    expect(hits, '颜色公式应有 3 处（r/g/b，叶子移除后仅投影路径一套）').toBeTruthy();
+    expect(hits!.length).toBe(3);
   });
 
   it('pow 底数安全：玫瑰分支内 pow 只接 clamp/abs 包裹的底数（负底数 pow 未定义）', () => {
@@ -1095,23 +1095,10 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).toMatch(/A \* A \+ B \* B < 1\.0/);
   });
 
-  it('真 3D 叶子：isLeafRaw 分流在投影之前，roll 翻转 + 绕茎公转 + 柄向叶梢显现', () => {
-    expect(roseCode).toMatch(/float isLeafRaw = step\(37\.0, cc\) \* \(1\.0 - step\(60\.0, cc\)\)/);
-    // 3D 叶分支必须先于投影路径（叶子不走投影压平）
-    expect(roseCode.indexOf('isLeafRaw > 0.5'))
-      .toBeGreaterThan(-1);
-    expect(roseCode.indexOf('isLeafRaw > 0.5'))
-      .toBeLessThan(roseCode.indexOf('inFrame'));
-    // roll 翻转：横向/深度绕叶长轴摆动
-    expect(roseCode).toMatch(/sin\(uGalaxyAge \* 0\.6 \+ j \* 2\.6\) \* 0\.6/);
-    // 绕茎（世界 y 轴）公转——但**轴心 = 叶根**：叶根钉在茎上固定，只有 blade 旋转（叶根不脱离茎）。
-    // 旋转必须在屏幕平面（xy）内——billboard 式保持叶形完整（绕竖直轴会侧棱对观众塌形成线，用户否决）
-    expect(roseCode).toMatch(/uGalaxyAge \* ROSE_LEAF_ORBIT/);
-    expect(roseCode).toMatch(/blade\.xy = mat2\(oc, -os2, os2, oc\) \* blade\.xy/);
-    expect(roseCode).not.toMatch(/blade\.xz = mat2/);
-    expect(roseCode).toMatch(/pos = anchor \+ blade/);
-    // 显现从叶柄向叶梢（ua 顺序），不走花冠的屏幕径向 dist01
-    expect(roseCode).toMatch(/appear \* 1\.4 - ua/);
+  it('叶子已移除（用户定稿）：无叶分支残留，叶粒子随花冠走投影路径', () => {
+    expect(roseCode).not.toMatch(/isLeafRaw|ROSE_LEAF_ORBIT|ROSE_LEAF_SCALE/);
+    // 花冠显现径向基准（花冠轴心）保留
+    expect(roseCode).toMatch(/ROSE_LEAF_CENTER/);
   });
 
   it('泛光层自动派生包含玫瑰分支（deriveBloomVertexShader 以 VERTEX_SHADER 为源）', () => {
