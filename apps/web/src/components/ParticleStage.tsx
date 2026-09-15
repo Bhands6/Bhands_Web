@@ -88,8 +88,8 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   // 水母花：正对观众（phi 小），纵向跨度大（花瓣顶 ~+3 / 触须底 ~-4）→ 相机拉远到 10.6
   // （FOV45 半高 ≈ 10.6×0.414 ≈ 4.39，16:9 半宽 ≈ 7.8；花横向铺开 ±4.4+花瓣半径，出血留边）
   jelly: { radius: 10.6, phi: 0.06 },
-  // 玫瑰：正面近对称构图（phi 小），世界高约 6.0（ROSE_SCALE 定）→ radius 8.2 时
-  // 纵向可见 ±3.4，花顶花底刚好入框（world y ∈ [-3.4, +3.2]，极值微量出血）
+  // 玫瑰：正面近对称构图（phi 小），投影后世界高 5.2（ROSE_WORLD_H 定）→ radius 8.2 时
+  // 纵向可见 ±3.4，花体 ±2.6 刚好入框留边
   rose: { radius: 8.2, phi: 0.05 }
 };
 
