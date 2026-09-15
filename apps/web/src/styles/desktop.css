@@ -296,8 +296,8 @@ body.home-wallpaper-preview #canvas-container{filter:none}
 .home-chip:hover{background:color-mix(in srgb,var(--home-accent) 10%,transparent);border-color:color-mix(in srgb,var(--home-accent) 38%,rgba(255,255,255,.10));color:#fff;box-shadow:0 10px 26px color-mix(in srgb,var(--home-accent) 8%,transparent);transform:translateY(-1px)}
 .home-console-chip{height:40px;padding:0 20px;font-size:13px;font-weight:720;border-color:color-mix(in srgb,var(--home-accent) 34%,rgba(255,255,255,.12));background:color-mix(in srgb,var(--home-accent) 12%,rgba(255,255,255,.055));color:#fff}
 .home-hero-actions{display:flex;align-items:center;gap:12px;margin-top:14px}
-.home-play-btn{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 20px;border-radius:999px;border:none;background:linear-gradient(135deg,color-mix(in srgb,var(--home-accent) 88%,#fff),color-mix(in srgb,var(--home-accent) 60%,#2442ff));color:#fff;font-family:inherit;font-size:13px;font-weight:720;cursor:pointer;transition:transform .18s,box-shadow .18s;box-shadow:0 8px 28px color-mix(in srgb,var(--home-accent) 32%,transparent)}
-.home-play-btn:hover{transform:translateY(-1px) scale(1.02);box-shadow:0 12px 36px color-mix(in srgb,var(--home-accent) 44%,transparent)}
+.home-play-btn{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 20px;border-radius:999px;border:none;background:linear-gradient(135deg,color-mix(in srgb,var(--home-accent) 88%,#fff),color-mix(in srgb,var(--home-accent) 60%,#2442ff));color:#fff;font-family:inherit;font-size:13px;font-weight:720;cursor:pointer;filter:brightness(.62) saturate(.85);box-shadow:none;transition:filter .25s,transform .18s,box-shadow .25s}
+.home-play-btn:hover{filter:brightness(1);transform:translateY(-1px) scale(1.02);box-shadow:0 12px 36px color-mix(in srgb,var(--home-accent) 44%,transparent)}
 .home-play-btn svg{opacity:.92}
 .home-hero-art-wrap{position:absolute;right:28px;bottom:24px;width:160px;height:160px;pointer-events:none}
 .home-hero-art{width:100%!important;height:100%!important;border-radius:28px!important;transform:rotate(2deg)!important}
