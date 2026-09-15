@@ -127,7 +127,8 @@ export const useUserStore = create<UserState>((set) => ({
         lyricsVisible: true,
       });
       document.body.classList.remove('immersive-mode','controls-visible','beat-pulse');
-      set({ user: null, loggedIn: false, playlists: [] });
+      // 退出 = 回到第一次进入浏览器的未登录锁定状态：免登录模式一并重置
+      set({ user: null, loggedIn: false, guestUnlocked: false, playlists: [] });
     }
   },
 
