@@ -13,8 +13,9 @@ bhands.icu {
 	reverse_proxy bhandsmusic:3001 {
 		# 流式传输（音频/歌词接口长连接）
 		flush_interval -1
-		# 清掉上游静态插件自带的 cache-control，避免与下方 immutable 头重复冲突
-		header_up Cache-Control ""
+		# 删除上游静态插件自带的 cache-control（响应头用 header_down），
+		# 避免与下方 @hashed 的 immutable 头重复、浏览器取更保守的 3600
+		header_down -Cache-Control
 	}
 
 	header {
