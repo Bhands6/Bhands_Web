@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { musicApi, SongItem } from '../api/music';
+import { musicApi, SongItem, AlbumItem } from '../api/music';
 import { weatherApi, WeatherInfo } from '../api/weather';
 import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
@@ -111,6 +111,23 @@ export default function HomeStage() {
     return () => { cancelled = true; };
   }, [loggedIn]);
 
+  // 免登录模式：热门新碟（网易云「新碟上架」，游客可用）——每日推荐位的数据源
+  const [guestAlbums, setGuestAlbums] = useState<AlbumItem[]>([]);
+  const [guestAlbumLoading, setGuestAlbumLoading] = useState(false);
+  useEffect(() => {
+    if (loggedIn) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await musicApi.getTopAlbums();
+        if (!cancelled && res.success) setGuestAlbums(res.data || []);
+      } catch {
+        // 静默，新碟横栏不显示
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loggedIn]);
+
   // 拉取当前城市天气
   useEffect(() => {
     let cancelled = false;
@@ -157,20 +174,28 @@ export default function HomeStage() {
     return [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || '';
   }, [history]);
 
-  // 封面统一受登录态控制：未登录显示 CSS 装饰圆盘，登录后显示真实图片
-  const heroCover = loggedIn ? (recommend.find((s) => s.cover)?.cover || '') : '';
+  // 封面统一受登录态控制：登录显示真实图片；免登录模式 Hero/Daily 用热门新碟封面
+  const heroCover = loggedIn
+    ? (recommend.find((s) => s.cover)?.cover || '')
+    : (guestAlbums.find((a) => a.cover)?.cover || '');
 
   // 各功能卡片封面：取对应内容的第一张图，无封面时回退 CSS 装饰圆盘
   const playlistCover = userPlaylists.find((p) => p.cover)?.cover || '';
   const dailyCover = heroCover;
   // 私人电台从推荐里随机挑一张（推荐加载后固定，不随重渲染抖动）
   const radioCover = useMemo(() => {
-    if (!loggedIn) return '';
-    const withCovers = recommend.filter((s) => s.cover);
+    if (loggedIn) {
+      const withCovers = recommend.filter((s) => s.cover);
+      return withCovers.length
+        ? withCovers[Math.floor(Math.random() * withCovers.length)].cover
+        : '';
+    }
+    // 免登录：从热门新碟随机挑一张（新碟列表拉取后固定）
+    const withCovers = guestAlbums.filter((a) => a.cover);
     return withCovers.length
       ? withCovers[Math.floor(Math.random() * withCovers.length)].cover
       : '';
-  }, [recommend, loggedIn]);
+  }, [recommend, guestAlbums, loggedIn]);
   const continueCover = loggedIn ? (history.find((t) => t.cover)?.cover || '') : '';
   // 天气电台封面：预取歌单的第一张封面
   const weatherCover = loggedIn ? (radioSongs.find((s) => s.cover)?.cover || '') : '';
@@ -179,17 +204,53 @@ export default function HomeStage() {
     return history.find((t) => (t.artist || '').includes(topArtist) && t.cover)?.cover || '';
   }, [history, topArtist, loggedIn]);
 
-  // 每日推荐 / 私人电台：推荐歌曲整单播放
+  // 每日推荐 / 私人电台：推荐歌曲整单播放（免登录模式改用热门新碟）
   const playRecommend = (shuffle = false) => {
+    if (!loggedIn) {
+      playGuestAlbumPick(shuffle);
+      return;
+    }
     if (!recommend.length) {
-      showToast(loggedIn ? '推荐加载中，稍后再试' : '登录后可同步每日推荐');
-      if (!loggedIn) setLoginModalOpen(true);
+      showToast('推荐加载中，稍后再试');
       return;
     }
     let list = recommend;
     if (shuffle) list = [...recommend].sort(() => Math.random() - 0.5);
     const queue = list.map(songItemToTrack);
     playTrack(queue[0], queue, 0);
+  };
+
+  // 免登录：播放一张热门新碟（专辑全部歌曲入队）
+  const playGuestAlbum = async (album: AlbumItem) => {
+    if (guestAlbumLoading) return;
+    setGuestAlbumLoading(true);
+    try {
+      const res = await musicApi.getAlbumDetail(album.id);
+      const tracks = res.success ? res.data?.tracks || [] : [];
+      if (!tracks.length) {
+        showToast('这张专辑暂时没有可播放的歌曲');
+        return;
+      }
+      const queue = tracks.map(songItemToTrack);
+      playTrack(queue[0], queue, 0);
+      showToast(`正在播放专辑「${album.name}」`);
+    } catch {
+      showToast('专辑加载失败，请稍后再试');
+    } finally {
+      setGuestAlbumLoading(false);
+    }
+  };
+
+  // 免登录：从热门新碟选一张（默认最新一张，shuffle = 随机）
+  const playGuestAlbumPick = (random = false) => {
+    if (!guestAlbums.length) {
+      showToast('热门新碟加载中，稍后再试');
+      return;
+    }
+    const pick = random
+      ? guestAlbums[Math.floor(Math.random() * guestAlbums.length)]
+      : guestAlbums[0];
+    playGuestAlbum(pick);
   };
 
   const openMyPlaylists = () => {
@@ -204,13 +265,8 @@ export default function HomeStage() {
     setQueuePanelAwaitHover(true);
   };
 
-  // 榜单卡片：整单入队直接播放，不弹队列面板
+  // 榜单卡片：整单入队直接播放，不弹队列面板（免登录也可直接播放）
   const playToplist = async (t: ToplistTile) => {
-    if (!loggedIn) {
-      showToast('登录后可打开榜单');
-      setLoginModalOpen(true);
-      return;
-    }
     await playPlaylist(t.id, t.title);
   };
 
@@ -307,29 +363,35 @@ export default function HomeStage() {
             style={heroCover ? { backgroundImage: `url(${heroCover})` } : undefined}
           />
           <div className="home-hero-cover-overlay" />
-          {!loggedIn && <div className="home-hero-login-hint">请登录获取详细体验</div>}
+          {!loggedIn && <div className="home-hero-login-hint">登录解锁歌单同步与每日推荐</div>}
           <div className="home-hero-bottom">
-            <div className="home-card-label">Daily Mix</div>
-            <div className="home-card-title">每日推荐</div>
+            <div className="home-card-label">{loggedIn ? 'Daily Mix' : 'New Albums'}</div>
+            <div className="home-card-title">{loggedIn ? '每日推荐' : '热门新碟'}</div>
             <div className="home-card-sub">
-              {loggedIn ? `已登录，为你准备了 ${recommend.length || '…'} 首歌曲` : '登录后同步你的今日歌曲'}
+              {loggedIn
+                ? `已登录，为你准备了 ${recommend.length || '…'} 首歌曲`
+                : guestAlbums.length
+                  ? `网易云最新专辑 · ${guestAlbums[0].name}`
+                  : '网易云最新专辑加载中…'}
             </div>
             <div className="home-hero-actions">
               <button
                 className="home-play-btn"
                 type="button"
                 onClick={(e) => { e.stopPropagation(); playRecommend(false); }}
-                title="播放每日推荐"
+                title={loggedIn ? '播放每日推荐' : '播放最新新碟'}
+                disabled={!loggedIn && guestAlbumLoading}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
-                <span>立即播放</span>
+                <span>{loggedIn ? '立即播放' : '播放最新碟'}</span>
               </button>
               <button
                 className="home-chip home-console-chip"
                 type="button"
                 onClick={(e) => { e.stopPropagation(); playRecommend(true); }}
+                disabled={!loggedIn && guestAlbumLoading}
               >
-                私人电台
+                {loggedIn ? '私人电台' : '随机新碟'}
               </button>
             </div>
             {/* 天气 pills */}
@@ -365,8 +427,10 @@ export default function HomeStage() {
 
           <button className="home-card" data-home-tone="mix" type="button" onClick={() => playRecommend(false)}>
             <div className="home-card-label">Daily</div>
-            <div className="home-card-title">每日推荐</div>
-            <div className="home-card-sub">{loggedIn ? '今日 30 首 · 点击播放' : '登录后同步你的今日歌曲'}</div>
+            <div className="home-card-title">{loggedIn ? '每日推荐' : '热门新碟'}</div>
+            <div className="home-card-sub">
+              {loggedIn ? '今日 30 首 · 点击播放' : guestAlbums.length ? '网易云最新专辑 · 点击播放' : '最新专辑加载中…'}
+            </div>
             <div
               className={`home-card-art${dailyCover ? ' has-cover' : ''}`}
               style={dailyCover ? { backgroundImage: `url(${dailyCover})` } : undefined}
@@ -376,7 +440,7 @@ export default function HomeStage() {
           <button className="home-card" data-home-tone="playlist" type="button" onClick={() => playRecommend(true)}>
             <div className="home-card-label">Song</div>
             <div className="home-card-title">私人电台</div>
-            <div className="home-card-sub">从你的推荐里随机开播</div>
+            <div className="home-card-sub">{loggedIn ? '从你的推荐里随机开播' : '从热门新碟随机开播'}</div>
             <div
               className={`home-card-art${radioCover ? ' has-cover' : ''}`}
               style={radioCover ? { backgroundImage: `url(${radioCover})` } : undefined}
@@ -422,6 +486,44 @@ export default function HomeStage() {
           </button>
         </div>
 
+        {/* 免登录模式：热门新碟横栏（网易云新碟上架，点卡片整张播放） */}
+        {!loggedIn && guestAlbums.length > 0 && (
+          <div className="home-rail">
+            <div className="home-section-head">
+              <div className="home-section-title">热门新碟</div>
+              <div className="home-section-note">
+                {guestAlbumLoading ? '正在打开专辑…' : '网易云最新专辑 · 点击整张播放'}
+              </div>
+            </div>
+            <div id="home-tile-row" className="home-tile-row">
+              {guestAlbums.map((a) => (
+                <button
+                  key={a.id}
+                  className="home-tile home-tile--queue"
+                  data-home-tone="playlist"
+                  type="button"
+                  onClick={() => playGuestAlbum(a)}
+                  disabled={guestAlbumLoading}
+                  title={`${a.name} · ${a.artist}`}
+                >
+                  <div
+                    className={`home-tile-cover${a.cover ? ' has-cover' : ''}`}
+                    style={a.cover ? { backgroundImage: `url(${a.cover})` } : undefined}
+                  />
+                  <div className="home-tile-title">{a.name}</div>
+                  <div className="home-tile-queue">
+                    <div className="home-tile-queue-item">
+                      <span className="home-tile-queue-num">♪</span>
+                      <span className="home-tile-queue-name">{a.artist}</span>
+                      <span className="home-tile-queue-artist">{a.size} 首</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 榜单横栏（桌面版同款：5 大榜单队列式卡片） */}
         <div className="home-rail">
           <div className="home-section-head">
@@ -437,39 +539,33 @@ export default function HomeStage() {
             </div>
           </div>
           <div id="home-tile-row" className="home-tile-row">
-            {toplistTiles.map((t) => {
-              // 封面与其他卡片一致：未登录显示装饰圆盘
-              const cover = loggedIn ? t.cover : '';
-              return (
-                <button
-                  key={t.id}
-                  className={`home-tile home-tile--queue${t.loading && !cover ? ' home-skeleton' : ''}`}
-                  data-home-tone="playlist"
-                  type="button"
-                  onClick={() => playToplist(t)}
-                  title={`${t.title} · ${t.sub}`}
-                >
-                  <div
-                    className={`home-tile-cover${cover ? ' has-cover' : ''}`}
-                    style={cover ? { backgroundImage: `url(${cover})` } : undefined}
-                  />
-                  <div className="home-tile-title">{t.title}</div>
-                  <div className="home-tile-queue">
-                    {loggedIn
-                      ? t.tracks.slice(0, 8).map((s, si) => (
-                          <div className="home-tile-queue-item" key={si}>
-                            <span className="home-tile-queue-num">{si + 1}</span>
-                            <span className="home-tile-queue-name">{s.name}</span>
-                            <span className="home-tile-queue-artist">{s.artist}</span>
-                          </div>
-                        ))
-                      : t.loading
-                        ? null
-                        : <div className="home-tile-queue-empty">登录后查看榜单歌曲</div>}
-                  </div>
-                </button>
-              );
-            })}
+            {toplistTiles.map((t) => (
+              <button
+                key={t.id}
+                className={`home-tile home-tile--queue${t.loading && !t.cover ? ' home-skeleton' : ''}`}
+                data-home-tone="playlist"
+                type="button"
+                onClick={() => playToplist(t)}
+                title={`${t.title} · ${t.sub}`}
+              >
+                <div
+                  className={`home-tile-cover${t.cover ? ' has-cover' : ''}`}
+                  style={t.cover ? { backgroundImage: `url(${t.cover})` } : undefined}
+                />
+                <div className="home-tile-title">{t.title}</div>
+                <div className="home-tile-queue">
+                  {t.loading && !t.tracks.length
+                    ? null
+                    : t.tracks.slice(0, 8).map((s, si) => (
+                        <div className="home-tile-queue-item" key={si}>
+                          <span className="home-tile-queue-num">{si + 1}</span>
+                          <span className="home-tile-queue-name">{s.name}</span>
+                          <span className="home-tile-queue-artist">{s.artist}</span>
+                        </div>
+                      ))}
+                </div>
+              </button>
+            ))}
           </div>
         </div>
       </div>

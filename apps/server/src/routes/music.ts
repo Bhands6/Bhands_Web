@@ -475,4 +475,53 @@ export async function musicRoutes(fastify: FastifyInstance) {
       return { success: false, data: [], error: '获取推荐失败' };
     }
   });
+
+  // 热门新碟（网易云「新碟上架」，游客可用）——免登录模式的「每日推荐」数据源
+  fastify.get('/top/album', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!limitedByIp(request, 'top-album', 20, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+    try {
+      const res = await NcmApi.top_album({ limit: 10 });
+      const albums = (res.body?.albums || []).map((a: any) => ({
+        id: String(a.id),
+        name: a.name || '',
+        artist: (a.artists || []).map((x: any) => x.name).filter(Boolean).join(' / '),
+        cover: a.picUrl || '',
+        size: a.size || 0
+      }));
+      return { success: true, data: albums };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: '获取热门新碟失败' });
+    }
+  });
+
+  // 专辑详情（游客可用）：免登录模式点开新碟即播
+  fastify.get('/album/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    if (!limitedByIp(request, 'album-detail', 30, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+    try {
+      const res = await NcmApi.album({ id, cookie: getNeteaseCookie(request) });
+      const al = res.body?.album;
+      if (!al) {
+        return reply.status(404).send({ success: false, error: '专辑不存在' });
+      }
+      return {
+        success: true,
+        data: {
+          id: String(al.id),
+          name: al.name || '',
+          cover: al.picUrl || '',
+          artist: (al.artists || []).map((x: any) => x.name).filter(Boolean).join(' / '),
+          tracks: (res.body?.songs || []).map(mapNcmSong)
+        }
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: '获取专辑详情失败' });
+    }
+  });
 }

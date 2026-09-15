@@ -171,12 +171,10 @@ export default function LoginModal() {
           <button className="modal-btn" onClick={() => setOpen(false)}>取消</button>
           <button
             className="modal-btn"
-            onClick={() => {
-              setOpen(false);
-              document.getElementById('search-input')?.focus();
-            }}
+            onClick={() => setOpen(false)}
+            title="不登录也能听：榜单、热门新碟均可直接播放"
           >
-            先搜索一首歌
+            不登录听歌
           </button>
           <button
             className="modal-btn primary"

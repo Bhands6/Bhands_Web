@@ -31,6 +31,23 @@ export interface PlaylistDetailData {
   tracks: SongItem[];
 }
 
+/** 热门新碟条目（网易云「新碟上架」，游客可用） */
+export interface AlbumItem {
+  id: string;
+  name: string;
+  artist: string;
+  cover: string;
+  size: number;
+}
+
+export interface AlbumDetailData {
+  id: string;
+  name: string;
+  cover: string;
+  artist: string;
+  tracks: SongItem[];
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -61,5 +78,15 @@ export const musicApi = {
 
   async getRecommendSongs(): Promise<ApiResponse<SongItem[]>> {
     return apiClient.get('/music/recommend');
+  },
+
+  /** 热门新碟（免登录模式的「每日推荐」数据源，游客可用） */
+  async getTopAlbums(): Promise<ApiResponse<AlbumItem[]>> {
+    return apiClient.get('/music/top/album');
+  },
+
+  /** 专辑详情（新碟点开即播，游客可用） */
+  async getAlbumDetail(id: string): Promise<ApiResponse<AlbumDetailData>> {
+    return apiClient.get(`/music/album/${id}`);
   }
 };
