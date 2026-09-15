@@ -1063,8 +1063,8 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
 
   it('颜色公式逐式移植：r/g/b = mod(255 - trunc(v), 256)/255（~&0xFF 的 GLSL 等价）', () => {
     const hits = roseCode.match(/mod\(255\.0 - trunc\([^)]+\), 256\.0\) \/ 255\.0/g);
-    expect(hits, '颜色公式应有 3 处（r/g/b）').toBeTruthy();
-    expect(hits!.length).toBe(3);
+    expect(hits, '颜色公式应有 6 处（投影路径 3 + 3D 叶 3）').toBeTruthy();
+    expect(hits!.length).toBe(6);
   });
 
   it('pow 底数安全：玫瑰分支内 pow 只接 clamp/abs 包裹的底数（负底数 pow 未定义）', () => {
@@ -1095,16 +1095,20 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).toMatch(/A \* A \+ B \* B < 1\.0/);
   });
 
-  it('叶子公转：两片叶（37<c≤60）绕**花冠轴心**缓转（与花冠涡旋同轴），且在出框检测前生效', () => {
-    expect(roseCode).toMatch(/float isLeaf = step\(37\.0, cc\) \* \(1\.0 - step\(60\.0, cc\)\)/);
-    expect(roseCode).toMatch(/uGalaxyAge \* ROSE_LEAF_ORBIT/);
-    // 公转 rel 必须用花冠轴心（画布中心 320/240 与花冠涡旋不同心，用户否决；
-    // 世界映射里的 (pxs - 320.0) 是画布→世界的平移基准，语义正确不受此限）
-    expect(roseCode).toMatch(/vec2 rel = vec2\(pxs - ROSE_LEAF_CENTER\.x, pys - ROSE_LEAF_CENTER\.y\)/);
-    expect(roseCode).not.toMatch(/vec2 rel = vec2\(pxs - 320\.0/);
-    // isLeaf 旋转必须出现在出框 step 检测之前（旋转后位置才参与出框判定）
-    expect(roseCode.indexOf('ROSE_LEAF_ORBIT'))
+  it('真 3D 叶子：isLeafRaw 分流在投影之前，roll 翻转 + 绕茎公转 + 柄向叶梢显现', () => {
+    expect(roseCode).toMatch(/float isLeafRaw = step\(37\.0, cc\) \* \(1\.0 - step\(60\.0, cc\)\)/);
+    // 3D 叶分支必须先于投影路径（叶子不走投影压平）
+    expect(roseCode.indexOf('isLeafRaw > 0.5'))
+      .toBeGreaterThan(-1);
+    expect(roseCode.indexOf('isLeafRaw > 0.5'))
       .toBeLessThan(roseCode.indexOf('inFrame'));
+    // roll 翻转：横向/深度绕叶长轴摆动
+    expect(roseCode).toMatch(/sin\(uGalaxyAge \* 0\.6 \+ j \* 2\.6\) \* 0\.6/);
+    // 绕茎（世界 y 轴）公转——真 3D 透视
+    expect(roseCode).toMatch(/uGalaxyAge \* ROSE_LEAF_ORBIT/);
+    expect(roseCode).toMatch(/pos\.xz = mat2\(oc, -os2, os2, oc\) \* pos\.xz/);
+    // 显现从叶柄向叶梢（ua 顺序），不走花冠的屏幕径向 dist01
+    expect(roseCode).toMatch(/appear \* 1\.4 - ua/);
   });
 
   it('泛光层自动派生包含玫瑰分支（deriveBloomVertexShader 以 VERTEX_SHADER 为源）', () => {
