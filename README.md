@@ -30,7 +30,7 @@
 
 | | | |
 |:---:|:---:|:---:|
-| ![](docs/screenshots/04-fx-meteor.jpg)<br>**丝绸** |![](docs/screenshots/05-fx-meteor.jpg)<br>**滚筒** | ![](docs/screenshots/06-fx-universe.jpg)<br>**星球** | 
+| ![](docs/screenshots/04-fx-silk.jpg)<br>**丝绸** |![](docs/screenshots/05-fx-meteor.jpg)<br>**滚筒** | ![](docs/screenshots/06-fx-universe.jpg)<br>**星球** | 
 | ![](docs/screenshots/07-fx-vacuum.png)<br>**虚空** |![](docs/screenshots/08-fx-photo.jpg)<br>**唱片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**星河** | 
 | ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | 
 | ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** |
