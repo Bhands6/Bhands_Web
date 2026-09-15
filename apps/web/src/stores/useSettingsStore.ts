@@ -155,7 +155,7 @@ export const QUALITY_PROFILES: Record<RenderQuality, { particles: number; dust: 
   eco: { particles: 88 * 88, dust: 120, pixelRatio: 1 },
   balanced: { particles: 108 * 108, dust: 220, pixelRatio: 1.5 },
   high: { particles: 118 * 118, dust: 380, pixelRatio: 2 },
-  ultra: { particles: 150 * 150, dust: 560, pixelRatio: 2 }
+  ultra: { particles: 168 * 168, dust: 560, pixelRatio: 2 }
 };
 
 /** 视觉预设（对应桌面版 preset-grid 概念：一键切换参数组合，形态保持用户当前选择） */
