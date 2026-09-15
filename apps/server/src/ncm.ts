@@ -25,11 +25,33 @@ export function withTimeout<T>(p: Promise<T>, ms: number, label = 'NCM'): Promis
 
 const raw = NcmApiDefault as unknown as Record<string, (query?: any) => Promise<any>>;
 
-/** 用法与原「NcmApi = NcmApiDefault as unknown as ...」完全一致，仅多一层超时 */
+/** 瞬时网络类错误（值得重试）：上游断连/502/超时。NeteaseCloudMusicApi 遇上游故障
+ *  会打印 [ERR] 502 read ECONNRESET 并 throw（2026-09-15 实测 top/album+personalized 同时抖断） */
+function isTransientNcmError(e: unknown): boolean {
+  const anyE = e as { message?: string; status?: number; body?: { code?: number }; code?: number };
+  const msg = anyE?.message || String(e);
+  if (/超时|timeout|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up/i.test(msg)) return true;
+  if (anyE?.status === 502 || anyE?.status === 503 || anyE?.body?.code === 502) return true;
+  return false;
+}
+
+/** 调用 + 瞬时失败自动重试一次（间隔 400ms）：上游抖动场景成功率大幅提升。
+ *  所有 NCM 调用均幂等安全（search/detail/轮询/开关类），重试无副作用。 */
+async function callWithRetry(fn: (query?: any) => Promise<any>, query: any): Promise<any> {
+  try {
+    return await withTimeout(fn.call(raw, query), NCM_TIMEOUT_MS);
+  } catch (e) {
+    if (!isTransientNcmError(e)) throw e;
+    await new Promise((r) => setTimeout(r, 400));
+    return await withTimeout(fn.call(raw, query), NCM_TIMEOUT_MS);
+  }
+}
+
+/** 用法与原「NcmApi = NcmApiDefault as unknown as ...」完全一致，仅多一层超时 + 瞬时重试 */
 export const NcmApi = new Proxy(raw, {
   get(target, prop: string | symbol) {
     const fn = target[prop as string];
     if (typeof fn !== 'function') return fn;
-    return (query?: any) => withTimeout(fn.call(target, query), NCM_TIMEOUT_MS);
+    return (query?: any) => callWithRetry(fn, query);
   }
 });

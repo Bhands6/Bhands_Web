@@ -479,9 +479,16 @@ export async function musicRoutes(fastify: FastifyInstance) {
   // 热门新碟（网易云「新碟上架」，游客可用）——免登录模式的「每日推荐」数据源。
   // ⚠️ 必须用 album_new（/album/new）——top_album 在当前 NcmApi 版本返回的是周/月榜
   // （weekData/monthData，无 albums 字段），实测空数据。
+  // 成功结果缓存 10 分钟 + 失败回退过期缓存（上游 502/超时抖动时游客仍能拿到数据）
+  const guestListCache = new Map<string, { data: any; at: number }>();
+  const GUEST_LIST_TTL = 10 * 60_000;
   fastify.get('/top/album', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!limitedByIp(request, 'top-album', 20, 60_000)) {
       return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+    const cached = guestListCache.get('top-album');
+    if (cached && Date.now() - cached.at < GUEST_LIST_TTL) {
+      return { success: true, data: cached.data };
     }
     try {
       const res = await NcmApi.album_new({ limit: 10 });
@@ -492,18 +499,25 @@ export async function musicRoutes(fastify: FastifyInstance) {
         cover: a.picUrl || '',
         size: a.size || 0
       }));
+      if (albums.length) guestListCache.set('top-album', { data: albums, at: Date.now() });
       return { success: true, data: albums };
     } catch (error) {
       fastify.log.error(error);
+      // 上游抖动：回退过期缓存（哪怕超 TTL）总比 500 好
+      if (cached) return { success: true, data: cached.data };
       return reply.status(500).send({ success: false, error: '获取热门新碟失败' });
     }
   });
 
   // 网易官方推荐歌单（personalized，游客可用，每次返回约 6 个且内容轮换）——
-  // 免登录模式主页「推荐歌单」数据源
+  // 免登录模式主页「推荐歌单」数据源（成功缓存 10 分钟 + 失败回退过期缓存）
   fastify.get('/personalized', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!limitedByIp(request, 'personalized', 20, 60_000)) {
       return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+    const cached = guestListCache.get('personalized');
+    if (cached && Date.now() - cached.at < GUEST_LIST_TTL) {
+      return { success: true, data: cached.data };
     }
     try {
       const res = await NcmApi.personalized({ limit: 6 });
@@ -513,9 +527,11 @@ export async function musicRoutes(fastify: FastifyInstance) {
         cover: p.picUrl || '',
         playCount: p.playCount || 0
       }));
+      if (lists.length) guestListCache.set('personalized', { data: lists, at: Date.now() });
       return { success: true, data: lists };
     } catch (error) {
       fastify.log.error(error);
+      if (cached) return { success: true, data: cached.data };
       return reply.status(500).send({ success: false, error: '获取推荐歌单失败' });
     }
   });
