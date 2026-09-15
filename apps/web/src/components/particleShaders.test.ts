@@ -476,13 +476,14 @@ describe('水母花（预设 11：半透明花瓣头 + 下垂摆动触须）', (
 
   it('尺寸档位经 vPack1.w（保留位）传入共享尺寸公式', () => {
     expect(jellyCode).toMatch(/vPack1\.w = sizeTag/);
-    const sizeTier = VERTEX_SHADER.match(/uPreset > 10\.5\)[\s\S]{0,400}?sz = clamp\(([^;]+);/);
+    // 预设 12（玫瑰）加入后，jelly 尺寸档条件带 < 11.5 上限
+    const sizeTier = VERTEX_SHADER.match(/uPreset > 10\.5 && uPreset < 11\.5\)[\s\S]{0,400}?sz = clamp\(([^;]+);/);
     if (!sizeTier) throw new Error('未找到水母花尺寸档');
     expect(sizeTier[1]).toContain('vPack1.w');
   });
 
   it('水母花亮度档不接 uBeat（呼吸走相位，节拍会让整朵齐闪）', () => {
-    const brightTier = VERTEX_SHADER.match(/uPreset > 10\.5\)\s*\{[^}]*?vBright = ([^;]+);/);
+    const brightTier = VERTEX_SHADER.match(/uPreset > 10\.5 && uPreset < 11\.5\)\s*\{[^}]*?vBright = ([^;]+);/);
     if (!brightTier) throw new Error('未找到水母花亮度档');
     expect(brightTier[1]).not.toContain('uBeat');
   });
@@ -1044,5 +1045,52 @@ describe('唱片封面显著度（用户反馈「头像不够明显」）', () =
     expect(m, '未找到 rimKeep（唱片预设的描边衰减）').toBeTruthy();
     expect(Number(m![1]), '描边衰减不到位，封面仍会被网点化').toBeLessThanOrEqual(0.5);
     expect(FRAGMENT_SHADER, 'rimKeep 必须真正乘回 readableRim').toMatch(/readableRim \*= rimKeep;/);
+  });
+});
+
+describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
+  // 玫瑰分支的截段：从 JELLY 注释之后到文件里最后一个兜底 else 块
+  const roseCode = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 12: ROSE'));
+
+  it('分支注册：11 改区间判定、12 用兜底 else，且在 JELLY 之后', () => {
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 11\.5\)/);
+    const i11 = VERTEX_SHADER.indexOf('Preset 11: JELLY');
+    const i12 = VERTEX_SHADER.indexOf('Preset 12: ROSE');
+    expect(i12, '预设 12 的分支必须存在').toBeGreaterThan(i11);
+    // 兜底必须仍是 else（不能是带条件的 else if），否则异常 uPreset 会落空分支
+    expect(roseCode).toMatch(/else \{/);
+  });
+
+  it('颜色公式逐式移植：r/g/b = mod(255 - trunc(v), 256)/255（~&0xFF 的 GLSL 等价）', () => {
+    const hits = roseCode.match(/mod\(255\.0 - trunc\([^)]+\), 256\.0\) \/ 255\.0/g);
+    expect(hits, '颜色公式应有 3 处（r/g/b）').toBeTruthy();
+    expect(hits!.length).toBe(3);
+  });
+
+  it('pow 底数安全：玫瑰分支内 pow 只接 clamp/abs 包裹的底数（负底数 pow 未定义）', () => {
+    // 先剥注释，避免示例性注释干扰
+    const code = roseCode.replace(/\/\/.*$/gm, '');
+    const pows = code.match(/pow\(/g)?.length ?? 0;
+    expect(pows, '玫瑰分支应存在 pow 调用').toBeGreaterThan(0);
+    // 每个 pow( 的底数必须安全：clamp(/abs(/max( 包裹（非负），或字面量 1.0 - appearRaw（appearRaw 已 clamp ∈[0,1]）
+    const bad = code.match(/pow\((?!(?:clamp|abs|max)\(|1\.0 - appearRaw)[^,)]+/g);
+    expect(bad, `发现未包裹底数的 pow：${bad === null ? '' : bad.join(' | ')}`).toBeNull();
+  });
+
+  it('显现（从花心向外渐次绽放）与刚体自转必须齐备，相位从切入预设起算', () => {
+    expect(roseCode).toMatch(/uGalaxyAge \/ ROSE_APPEAR/);
+    expect(roseCode).toMatch(/1\.0 - pow\(1\.0 - appearRaw, 3\.0\)/);
+    expect(roseCode).toMatch(/uGalaxyAge \* ROSE_SPIN/);
+    expect(roseCode).toMatch(/bloomIn/);
+  });
+
+  it('无效参数域（A²+B²≥1 约 21% 网格点）必须隐藏：藏远景 + alpha 0', () => {
+    expect(roseCode).toMatch(/vec3\(0\.0, 0\.0, -90\.0\)/);
+    expect(roseCode).toMatch(/vAlpha = 0\.0/);
+    expect(roseCode).toMatch(/A \* A \+ B \* B < 1\.0/);
+  });
+
+  it('泛光层自动派生包含玫瑰分支（deriveBloomVertexShader 以 VERTEX_SHADER 为源）', () => {
+    expect(BLOOM_VERTEX_SHADER).toContain('Preset 12: ROSE');
   });
 });

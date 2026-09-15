@@ -116,6 +116,21 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define JELLY_HEAD_SHARE 0.05  // 核心亮斑粒子占比
 #define JELLY_HAZE_SHARE 0.05  // 花头光雾占比（大软点低 alpha，叠出参考图的光晕）
 #define JELLY_DOME_SHARE 0.50  // 半球伞盖粒子占比（v9：8→10 朵后从 0.46 上调，补回伞盖密度；其余 40% 为腿）
+
+// ---- 玫瑰（Preset 12）形态常量：移植参考实现的参数化数学玫瑰（原版 50 万点 CPU 渲染 → 粒子化）----
+// calc(a,b,c) 分段（30 万点采样占比，脚本 .workbuddy/tmp-rose-sampling.mjs）：
+//   c>60 花蕊枝干 2.2% / 37<c≤60 外圈花瓣 29% / 32<c≤37 花萼 6.8% / 其余花瓣主体 41%；
+//   (a,b) 均匀网格里 A²+B²≥1 的 21% 无效（粒子隐藏）。
+// 采样分布：x p1..p99 [-307,234]、y [-285,691]、z [498,1279] → center/scale 按此测定。
+// 颜色公式 r = ~(r*h)&0xFF 的 GLSL 等价 = mod(255 - trunc(v), 256)（v 整数时数学恒等，见分支内）。
+#define ROSE_SIZE    500.0  // 原版 rosesize（参数 → 坐标基数）
+#define ROSE_H       -250.0 // 原版 h（颜色基数，负值 → 取反后出红粉调）
+#define ROSE_LAYERS  46.0   // 花瓣层数（floor(u*46)；顶层 45/0.74≈60.8 落入花蕊枝干分支）
+#define ROSE_CENTER  vec3(-35.0, 200.0, 890.0) // 采样分布中心（平移到世界原点）
+#define ROSE_SCALE   0.0062 // 原始坐标 → 世界坐标（玫瑰世界高约 6.0，配 radius 8.2 机位）
+#define ROSE_DIST_MAX 850.0 // 显现排序的归一化半径（花心向外渐次绽放）
+#define ROSE_APPEAR  1.8    // 显现动画时长（秒，切入预设起算，ease-out cubic）
+#define ROSE_SPIN    0.35   // 自转角速度（rad/s，刚体绕花轴整体旋转——比原版 a 参数偏移更平滑无跳变）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -894,7 +909,7 @@ void main(){
   //  · 配色三段：顶白 / 中段淡蓝 / 伞缘淡紫；片元端走 pow2.6 柔边「薄纱」光斑；
   //  · 整朵缓慢漂移 + 伞盖呼吸，不接节拍位置量（工作流 4.7③：音频只进亮度与幅度）。
   // ====================================================
-  else {
+  else if (uPreset < 11.5) {
     float t6 = t * 0.55;   // 水母花的缓动时间（呼吸/漂移/摆动共用，纯时间量）
     float creature = floor(hash11(aRand * 101.0) * JELLY_COUNT);
     float role = hash11(aRand * 211.0);
@@ -1045,6 +1060,127 @@ void main(){
   }
 
   // ====================================================
+  //  Preset 12: ROSE — 玫瑰（移植参考实现的参数化数学玫瑰）
+  //
+  //  原版：CPU 每帧 50 万点 z-buffer 像素渲染。粒子化：calc 分段公式整体搬进
+  //  顶点着色器，粒子即点云（无 z-buffer/像素写入）；(a,b) 取自 aUv 均匀网格，
+  //  花瓣层 c 由 aRand 哈希离散成 46 层。无效参数域 A²+B²≥1 约 21% 粒子隐藏。
+  //  观感与交互（对齐原版）：
+  //  · 切入预设从花心向外渐次绽放（原版按距花心排序渐进显现，时长 ROSE_APPEAR）
+  //  · 整朵刚体自转（绕花轴）——替代原版的 a 参数偏移：统计无缝但粒子会单点跳变
+  //  · 颜色公式逐式移植：r=~(r*h)&0xFF 的 GLSL 等价 mod(255-trunc(v),256)
+  //  · 主层 Additive（ParticleStage 门控）：黑底 + 红粉叠加出花瓣发光质感
+  //  · 音频只进亮度与整体微缩放（工作流 4.7③），不接位置量
+  // ====================================================
+  else {
+    // ---- 显现进度：切入预设起算（uGalaxyAge 对 rose 也在切入时归零），ease-out cubic ----
+    float appearRaw = clamp(uGalaxyAge / ROSE_APPEAR, 0.0, 1.0);
+    float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
+
+    float ra = aUv.x;
+    float rb = aUv.y;
+    float cc = floor(hash11(aRand * 97.0) * ROSE_LAYERS) / 0.74;
+
+    vec3 rp = vec3(0.0);
+    float rC = 0.0;
+    float gC = 0.0;
+    float valid = 0.0;
+
+    if (cc > 60.0) {
+      // ---- 花蕊枝干（原版 c>60）：螺旋细刺 + 主茎 ----
+      float spike = 13.0 + 5.0 / (0.2 + pow(clamp(rb * 4.0, 0.0, 4.0), 4.0));
+      rp = vec3(
+        sin(ra * 7.0) * spike - sin(rb) * 50.0,
+        rb * ROSE_SIZE + 50.0,
+        625.0 + cos(ra * 7.0) * spike + rb * 400.0
+      );
+      rC = ra - rb / 2.0;
+      gC = ra;
+      valid = 1.0;
+    } else {
+      float A = ra * 2.0 - 1.0;
+      float B = rb * 2.0 - 1.0;
+      if (A * A + B * B < 1.0) {
+        valid = 1.0;
+        if (cc > 37.0) {
+          // ---- 外圈花瓣（37<c≤60）：两组交错挂点，n 取 4/6；尖刺锐度来自 o 项的 1/(a+0.01) ----
+          float j = mod(floor(cc), 2.0);
+          float n = mix(4.0, 6.0, j);
+          float o = 0.5 / (ra + 0.01) + cos(rb * 125.0) * 3.0 - ra * 300.0;
+          float w = rb * ROSE_H;
+          rp = vec3(
+            o * cos(n) + w * sin(n) + j * 610.0 - 390.0,
+            o * sin(n) - w * cos(n) + 550.0 - j * 350.0,
+            1180.0 + cos(B + A) * 99.0 - j * 300.0
+          );
+          // pow 底数全部 clamp（项目铁律）；cos^30 是偶次幂，取 abs 保 GLSL 定义域
+          rC = 0.4 - ra * 0.1
+             + pow(clamp(1.0 - B * B, 0.0, 1.0), 1500.0) * 0.15
+             - ra * rb * 0.4
+             + cos(ra + rb) / 5.0
+             + pow(abs(cos((o * (ra + 1.0) + (B > 0.0 ? w : -w)) / 25.0)), 30.0) * 0.1 * (1.0 - B * B);
+          gC = o / 1000.0 + 0.7 - o * w * 0.000003;
+        } else if (cc > 32.0) {
+          // ---- 花萼层（32<c≤37）：杯状托瓣 ----
+          float c2 = cc * 1.16 - 0.15;
+          float o = ra * 45.0 - 20.0;
+          float w = rb * rb * ROSE_H;
+          float z2 = o * sin(c2) + w * cos(c2) + 620.0;
+          rp = vec3(
+            o * cos(c2) - w * sin(c2),
+            28.0 + cos(B * 0.5) * 99.0 - rb * rb * rb * 60.0 - z2 / 2.0 - ROSE_H,
+            z2
+          );
+          rC = (rb * rb * 0.3 + pow(clamp(1.0 - A * A, 0.0, 1.0), 7.0) * 0.15 + 0.3) * rb;
+          gC = rb * 0.7;
+        } else {
+          // ---- 花瓣主体（c≤32）：旋绕花冠，公式与原版逐项一致 ----
+          float o = A * (2.0 - rb) * (80.0 - cc * 2.0);
+          float w = 99.0 - cos(A) * 120.0 - cos(rb) * (-ROSE_H - cc * 4.9)
+                  + cos(pow(clamp(1.0 - rb, 0.0, 1.0), 7.0)) * 50.0 + cc * 2.0;
+          float z3 = o * sin(cc) + w * cos(cc) + 700.0;
+          rp = vec3(
+            o * cos(cc) - w * sin(cc),
+            B * 99.0 - cos(pow(clamp(1.0 - rb, 0.0, 1.0), 7.0)) * 50.0 - cc / 3.0 - z3 / 1.35 + 450.0,
+            z3
+          );
+          rC = (1.0 - rb / 1.2) * 0.9 + ra * 0.1;
+          gC = pow(clamp(1.0 - rb, 0.0, 1.0), 20.0) / 4.0 + 0.05;
+        }
+      }
+    }
+
+    if (valid < 0.5) {
+      // 无效参数域（约 21% 网格点）：藏到远景（同 VOID 手法），alpha 0
+      pos = vec3(0.0, 0.0, -90.0);
+      vAlpha = 0.0;
+    } else {
+      // ---- 世界坐标：中心平移 + 缩放（常量由 30 万点采样测定，见 ROSE_* 注释）----
+      pos = (rp - ROSE_CENTER) * ROSE_SCALE;
+
+      // ---- 刚体自转（绕花轴 y）----
+      float rotY = uGalaxyAge * ROSE_SPIN;
+      float cs_ = cos(rotY);
+      float sn_ = sin(rotY);
+      pos.xz = mat2(cs_, -sn_, sn_, cs_) * pos.xz;
+
+      // ---- 节拍微缩放 + 显现（花心向外渐次绽放）----
+      pos *= 1.0 + uBeat * 0.03;
+      float dist01 = clamp(length(rp - ROSE_CENTER) / ROSE_DIST_MAX, 0.0, 1.0);
+      float bloomIn = clamp((appear * 1.25 - dist01) * 5.0, 0.0, 1.0);
+
+      // ---- 颜色：v 整数时 ~(v)&0xFF = mod(255-v, 256)（先 trunc 再取模，GLSL mod 恒非负）----
+      float rc = mod(255.0 - trunc(rC * ROSE_H), 256.0) / 255.0;
+      float gc = mod(255.0 - trunc(gC * ROSE_H), 256.0) / 255.0;
+      float bc = mod(255.0 - trunc(rC * rC * -80.0), 256.0) / 255.0;
+      vColor = vec3(rc, gc, bc);
+      // 显现期按 bloomIn 淡入；音频只进亮度（工作流 4.7③）
+      vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10);
+      maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uMid * 0.03);
+    }
+  }
+
+  // ====================================================
   //  鼠标交互 (仅 SILK)
   // ====================================================
   if (uMouseActive > 0.5 && uPreset < 0.5) {
@@ -1091,10 +1227,13 @@ void main(){
       //    那会把旋臂推成一条高对比亮带，正是「像手绘描边」的成因之一。
       //    基准 0.90 → 1.02：RADIAL_POW 压平后叠层密度整体下降，同步补偿（见 vAlpha 注释）。
       vBright = 1.02 + maxRippleAmp * 0.50 + uBass * 0.040 + uEnergy * 0.035;
-    } else if (uPreset > 10.5) {
+    } else if (uPreset > 10.5 && uPreset < 11.5) {
       // 水母花（JELLY）：半透明纱质感靠低 alpha 叠层，额外增益保持克制；
       // 呼吸已由分支内 breath 相位承担，刻意不接 uBeat（拍点会让整朵齐闪）。
       vBright = 0.92 + maxRippleAmp * 0.60 + uBass * 0.05 + uEnergy * 0.04;
+    } else if (uPreset > 11.5) {
+      // 玫瑰（ROSE）：红粉光感靠低 alpha + Additive 叠层，亮度增益保持克制
+      vBright = 0.96 + maxRippleAmp * 0.50 + uBass * 0.06 + uEnergy * 0.04;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -1123,11 +1262,15 @@ void main(){
     float galaxyDrive = (0.80 + galaxyTwinkle * 0.5)
                       * (1.0 + uBeat * 0.6 * mix(GALAXY_CORE_PULSE, 1.0, galaxyCore));
     sz = clamp(depthSize * galaxyStar * galaxyDrive * mix(GALAXY_CORE_SHRINK, 1.0, galaxyCore), 0.35, 6.00);
-  } else if (uPreset > 10.5) {
+  } else if (uPreset > 10.5 && uPreset < 11.5) {
     // 水母花（JELLY）：核心亮斑大、光雾更大更淡、花瓣中、触须细丝 —— 档位由分支经 vPack1.w 传入
     // （核心 1.35 / 光雾 1.6 / 花瓣 0.85 / 触须 0.45）。尺寸不接 uBeat：呼吸走相位，节拍撑大会整朵齐胀。
     // 0.40 下限保住触须丝的连续性（丝断了就散成点云）；上限 3.4 容纳光雾的大软点。
     sz = clamp(depthSize * vPack1.w * (1.0 + maxRippleAmp * 0.22), 0.40, 3.40);
+  } else if (uPreset > 11.5) {
+    // 玫瑰（ROSE）：细点花瓣质感，尺寸小而均匀（原版是 1px 点云），微接低音；
+    // 上限收紧——点大了花瓣的「丝绒」细节会糊成一团颗粒。
+    sz = clamp(depthSize * 0.62 * (1.0 + uBass * 0.10 + uMid * 0.06), 0.55, 2.60);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。

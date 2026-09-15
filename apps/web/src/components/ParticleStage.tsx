@@ -26,7 +26,7 @@ import {
  * - 封面纹理采样取色（新旧封面 crossfade）+ CPU 端 Sobel 边缘纹理（丝绸轮廓增益）
  * - 涟漪系统：bass 上升沿在 3×3 宫格随机触发 DataTexture 涟漪
  * - 音频包络（attack/release）+ 唱片/壁纸预设专用频段重映射
- * - 双层渲染：NormalBlending 主层 + AdditiveBlending 泛光层（水母花预设 11 时主层切 Additive）
+ * - 双层渲染：NormalBlending 主层 + AdditiveBlending 泛光层（水母花 11 / 玫瑰 12 时主层切 Additive）
  * - 环绕相机：预设机位 + 鼠标视差 + 电影漂移 + 节拍 FOV 冲击
  * 切换预设不重建场景（只改 uPreset + 相机目标 + 转场脉冲），与桌面版一致。
  */
@@ -87,7 +87,10 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   spiral: { radius: 8.8, phi: 0.34 },
   // 水母花：正对观众（phi 小），纵向跨度大（花瓣顶 ~+3 / 触须底 ~-4）→ 相机拉远到 10.6
   // （FOV45 半高 ≈ 10.6×0.414 ≈ 4.39，16:9 半宽 ≈ 7.8；花横向铺开 ±4.4+花瓣半径，出血留边）
-  jelly: { radius: 10.6, phi: 0.06 }
+  jelly: { radius: 10.6, phi: 0.06 },
+  // 玫瑰：正面近对称构图（phi 小），世界高约 6.0（ROSE_SCALE 定）→ radius 8.2 时
+  // 纵向可见 ±3.4，花顶花底刚好入框（world y ∈ [-3.4, +3.2]，极值微量出血）
+  rose: { radius: 8.2, phi: 0.05 }
 };
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -569,8 +572,9 @@ export default function ParticleStage() {
     let burstRequested = true;
 
     /**
-     * 螺旋星云的差速自转相位基准：切入 spiral 预设时置位，由 animate 在下一帧
-     * 记下 uGalaxyAge 的零点（store 订阅回调里拿不到 rAF 的 t，与 burstRequested 同款）。
+     * 预设相位基准：切入 spiral 时置位（差速自转从干净 2 臂开始）；切入 rose 时置位
+     * （绽放显现 + 自转从花心初始态开始）。由 animate 在下一帧记下 uGalaxyAge 的零点
+     * （store 订阅回调里拿不到 rAF 的 t，与 burstRequested 同款）。
      * ⚠️ 差速自转会让旋臂随时间越缠越紧（缠绕问题，见 particleShaders.ts 的
      * GALAXY_* 注释），相位从切入时刻起算保证每次切进来都从「干净的 2 条臂」开始。
      */
@@ -597,18 +601,21 @@ export default function ParticleStage() {
         uniforms.uPreset.value = idx;
         uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value as number, 0.15);
         Object.assign(orbitTarget, PRESET_CAMERA[s.visual.effect]);
-        // 水母花（11）：主层切 AdditiveBlending —— 「黑底 + 低 alpha + 加色叠加」是
-        // 发光薄纱的公式：黑背景下单粒子观感与 Normal 相同，但重叠区会持续累加爆光，
-        // 叠出「发光薄雾」质感（depthWrite 已是 false，无遮挡问题）；其余预设恢复 Normal。
-        const wantBlending = idx === EFFECT_PRESET_INDEX.jelly ? THREE.AdditiveBlending : THREE.NormalBlending;
+        // 水母花（11）/ 玫瑰（12）：主层切 AdditiveBlending —— 「黑底 + 低 alpha + 加色叠加」是
+        // 发光薄纱/花瓣的公式：黑背景下单粒子观感与 Normal 相同，但重叠区会持续累加爆光，
+        // 叠出「发光薄雾/丝绒花瓣」质感（depthWrite 已是 false，无遮挡问题）；其余预设恢复 Normal。
+        const wantBlending =
+          idx === EFFECT_PRESET_INDEX.jelly || idx === EFFECT_PRESET_INDEX.rose
+            ? THREE.AdditiveBlending
+            : THREE.NormalBlending;
         if (material.blending !== wantBlending) {
           material.blending = wantBlending;
           material.needsUpdate = true;
         }
         // 切到迸发效果时立刻爆一次，否则要等下一首歌才看得到
         if (s.visual.effect === 'burst') burstRequested = true;
-        // 切到螺旋星云时差速自转相位归零（见 galaxyAt 注释）
-        if (s.visual.effect === 'spiral') galaxyResetRequested = true;
+        // 切到螺旋星云时差速自转相位归零；切到玫瑰时绽放显现 + 自转从干净的初始态开始
+        if (s.visual.effect === 'spiral' || s.visual.effect === 'rose') galaxyResetRequested = true;
       }
     });
 
