@@ -154,11 +154,13 @@ function upstreamOf(url: string): string {
  */
 async function acceptCandidate(r: ParseResult, expectedMs: number): Promise<boolean> {
   if (r.trial) return true;
-  // 声明大小防御（不依赖探测，probe 不可达时的兜底）：期望 ≥90s 的歌，上游声明大小
-  // <400KB 必是碎片/广告垫片（2026-09-15 生产实锤：腾讯云服务器 probe 不到 kuwo CDN →
-  // fail-open 放行了 185KB 垫片；本地 probe 可达所以拦得住——环境差异导致防御失效）
-  if (expectedMs >= 90_000 && r.size > 0 && r.size < 400_000) {
-    console.warn(`[MusicParser] 声明大小 ${r.size}B 过小（期望 ≥${Math.round(expectedMs / 1000)}s），疑似广告垫片，丢弃 ${r.source}`);
+  // 声明大小防御（不依赖探测，probe 不可达时的兜底），两档：
+  // ① 期望 ≥90s：声明 <400KB 必是碎片/广告垫片；
+  // ② 元数据缺失（expectedMs=0，song_detail 失败时路由传 0）：声明 <300KB 拒绝——
+  //    合法完整歌 128kbps 下 1 分钟 ≈ 1MB，垫片 185KB 远低于此（2026-09-15 生产实锤：
+  //    腾讯云 probe 不到 kuwo CDN → probe fail-open + expectedMs=0 → 垫片双重漏网）
+  if (r.size > 0 && r.size < 400_000 && (expectedMs >= 90_000 || expectedMs === 0)) {
+    console.warn(`[MusicParser] 声明大小 ${r.size}B 过小（expectedMs=${expectedMs}），疑似广告垫片，丢弃 ${r.source}`);
     return false;
   }
   const upstream = upstreamOf(r.url);
