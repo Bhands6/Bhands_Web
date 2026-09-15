@@ -22,9 +22,10 @@ bhands.icu {
 		-X-Powered-By
 	}
 
-	# 已有缓存策略的静态资源（带 hash 的 /assets/*）延长缓存
+	# 已有缓存策略的静态资源（带 hash 的 /assets/*）长效缓存：
+	# 内容变 => hash 变 => 文件名变，浏览器自动当新资源下载，可安全 immutable
 	@hashed path /assets/*
-	header @hashed Cache-Control "public, max-age=3600"
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
 
 	log {
 		output file /data/access.log {

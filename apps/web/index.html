@@ -14,10 +14,32 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="BhandsMusic" />
     <title>BhandsMusic</title>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" rel="stylesheet" />
+    <!-- 启动加载层：JS bundle 下载执行期间的白屏替换；React 挂载后 #root 非空即自动隐藏（纯 CSS，零依赖） -->
+    <style>
+      .boot-loader{position:fixed;inset:0;z-index:9999;background:#08090B;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;font-family:'Inter','Noto Sans SC',system-ui,sans-serif;color:#9aa0ab;user-select:none}
+      .boot-dots{display:flex;gap:10px}
+      .boot-dots i{width:8px;height:8px;border-radius:50%;background:#7b8cff;opacity:.35;animation:boot-pulse 1.2s ease-in-out infinite}
+      .boot-dots i:nth-child(2){animation-delay:.2s}
+      .boot-dots i:nth-child(3){animation-delay:.4s}
+      @keyframes boot-pulse{0%,100%{opacity:.25;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+      .boot-name{font-size:15px;letter-spacing:.35em;text-transform:uppercase;color:#e8eaf0;opacity:.9}
+      .boot-hint{font-size:12px;color:#5b6068}
+      @media (prefers-reduced-motion: reduce){.boot-dots i{animation:none;opacity:.6}}
+      #root:not(:empty)~.boot-loader{display:none}
+    </style>
+    <!-- 字体非阻塞加载：Google Fonts 在部分网络不可达，阻塞式 stylesheet 会白屏挂到超时；
+         media=print 不阻塞渲染，加载完成后切换为全量生效 -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" /></noscript>
   </head>
   <body>
     <div id="root"></div>
+    <div class="boot-loader" aria-hidden="true">
+      <div class="boot-dots"><i></i><i></i><i></i></div>
+      <div class="boot-name">BhandsMusic</div>
+      <div class="boot-hint">首次加载资源较多，请稍候…</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
