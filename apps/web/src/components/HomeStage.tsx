@@ -425,7 +425,7 @@ export default function HomeStage() {
             <div className="home-hero-login-hint" style={{ flexDirection: 'column', gap: 12 }}>
               请登录获取详细体验
               <button
-                className="home-chip home-console-chip"
+                className="home-play-btn"
                 type="button"
                 style={{ pointerEvents: 'auto' }}
                 onClick={(e) => {
