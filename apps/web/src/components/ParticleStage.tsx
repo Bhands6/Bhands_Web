@@ -317,11 +317,13 @@ export default function ParticleStage() {
 
     // ---------- 双层粒子（泛光层 + 主层，共享几何） ----------
     // 桌面版 coverParticleGridForResolution：奇数网格保证中心对称（118×118 ≈ 1.4 万粒子）
-    let grid = Math.round(Math.sqrt(quality.particles));
-    if (grid % 2 === 0) grid += 1;
-    uniforms.uGrid.value = grid;   // 着色器靠它把 aUv 还原成连续编号，前 5 个做流星槽位
+    const baseGrid = Math.round(Math.sqrt(quality.particles)) % 2 === 0
+      ? Math.round(Math.sqrt(quality.particles)) + 1
+      : Math.round(Math.sqrt(quality.particles));
+    let activeGrid = baseGrid;
+    uniforms.uGrid.value = activeGrid;   // 着色器靠它把 aUv 还原成连续编号，前 5 个做流星槽位
     syncPixelUniforms();
-    const geo = buildCoverParticleGeometry(grid);
+    let geo = buildCoverParticleGeometry(activeGrid);
 
     const bloomMaterial = new THREE.ShaderMaterial({
       uniforms,
@@ -349,6 +351,21 @@ export default function ParticleStage() {
     particles.frustumCulled = false;
     particles.renderOrder = 1;
     scene.add(particles);
+
+    // ---------- 玫瑰密度加成：切入玫瑰时粒子几何按 ROSE_GRID_BOOST 重建，切出还原 ----------
+    // 重建是同步一次性（几万点的 Float32Array 生成毫秒级），转场脉冲掩盖切换闪烁；
+    // 仅玫瑰预设需要更高密度（花瓣细颗粒质感），其余预设保持基础网格不动。
+    const ROSE_GRID_BOOST = 1.25;
+    const rebuildGeometry = (newGrid: number) => {
+      if (newGrid === activeGrid) return;
+      const old = geo;
+      geo = buildCoverParticleGeometry(newGrid);
+      bloomParticles.geometry = geo;
+      particles.geometry = geo;
+      old.dispose();
+      activeGrid = newGrid;
+      uniforms.uGrid.value = newGrid;
+    };
 
     /**
      * ⚠️ 着色器编译自检（诊断用，别删）。
@@ -616,6 +633,12 @@ export default function ParticleStage() {
         if (s.visual.effect === 'burst') burstRequested = true;
         // 切到螺旋星云时差速自转相位归零；切到玫瑰时绽放显现 + 自转从干净的初始态开始
         if (s.visual.effect === 'spiral' || s.visual.effect === 'rose') galaxyResetRequested = true;
+        // 玫瑰密度加成：切入时几何重建到 ROSE_GRID_BOOST 倍网格（花瓣粒子更多），切出还原基础网格
+        if (idx === EFFECT_PRESET_INDEX.rose && activeGrid === baseGrid) {
+          rebuildGeometry(Math.round(baseGrid * ROSE_GRID_BOOST) | 1);
+        } else if (idx !== EFFECT_PRESET_INDEX.rose && activeGrid !== baseGrid) {
+          rebuildGeometry(baseGrid);
+        }
       }
     });
 
