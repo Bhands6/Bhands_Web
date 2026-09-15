@@ -154,15 +154,7 @@ function upstreamOf(url: string): string {
  */
 async function acceptCandidate(r: ParseResult, expectedMs: number): Promise<boolean> {
   if (r.trial) return true;
-  // 声明大小防御（不依赖探测，probe 不可达时的兜底），两档：
-  // ① 期望 ≥90s：声明 <400KB 必是碎片/广告垫片；
-  // ② 元数据缺失（expectedMs=0，song_detail 失败时路由传 0）：声明 <300KB 拒绝——
-  //    合法完整歌 128kbps 下 1 分钟 ≈ 1MB，垫片 185KB 远低于此（2026-09-15 生产实锤：
-  //    腾讯云 probe 不到 kuwo CDN → probe fail-open + expectedMs=0 → 垫片双重漏网）
-  if (r.size > 0 && r.size < 400_000 && (expectedMs >= 90_000 || expectedMs === 0)) {
-    console.warn(`[MusicParser] 声明大小 ${r.size}B 过小（expectedMs=${expectedMs}），疑似广告垫片，丢弃 ${r.source}`);
-    return false;
-  }
+  // 声明大小的硬防御已前置到 tryStrategies（isHardRejected，不进宽容回落）
   const upstream = upstreamOf(r.url);
   if (!upstream) return true;
   const probe = await probeAudio(upstream);
@@ -192,10 +184,22 @@ async function tryStrategies(
     let pending = strategies.length;
     let fallback: ParseResult | null = null;
 
+    // 硬防御前置（2026-09-15 生产实锤）：声明大小碎片/广告垫片直接丢弃且**不进宽容回落**——
+    // 回落本意是兜「时长元数据误差误杀的正确源」，但垫片（物理大小是绝对证据）被拒后
+    // 若也进回落，全部源完成时 resolve(fallback) 会把垃圾又放回来（晴天 185KB 实测漏网）。
+    const isHardRejected = (r: ParseResult): boolean =>
+      r.size > 0 && r.size < 400_000 && (expectedMs >= 90_000 || expectedMs === 0);
+
     strategies.forEach(async (fn) => {
       try {
         const r = await fn(p);
         if (r?.url && !settled) {
+          if (isHardRejected(r)) {
+            console.warn(`[MusicParser] 声明大小 ${r.size}B 过小（expectedMs=${expectedMs}），疑似广告垫片，丢弃 ${r.source}`);
+            pending--;
+            if (pending === 0 && !settled) resolve(fallback);
+            return;
+          }
           if (await acceptCandidate(r, expectedMs)) {
             if (!settled) { settled = true; resolve(r); }
             return;
