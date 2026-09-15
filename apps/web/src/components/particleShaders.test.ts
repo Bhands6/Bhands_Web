@@ -1104,9 +1104,11 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
       .toBeLessThan(roseCode.indexOf('inFrame'));
     // roll 翻转：横向/深度绕叶长轴摆动
     expect(roseCode).toMatch(/sin\(uGalaxyAge \* 0\.6 \+ j \* 2\.6\) \* 0\.6/);
-    // 绕茎（世界 y 轴）公转——真 3D 透视
+    // 绕茎（世界 y 轴）公转——但**轴心 = 叶根**：叶根钉在茎上固定，只有 blade 旋转（叶根不脱离茎）
     expect(roseCode).toMatch(/uGalaxyAge \* ROSE_LEAF_ORBIT/);
-    expect(roseCode).toMatch(/pos\.xz = mat2\(oc, -os2, os2, oc\) \* pos\.xz/);
+    expect(roseCode).toMatch(/blade\.xz = mat2\(oc, -os2, os2, oc\) \* blade\.xz/);
+    expect(roseCode).toMatch(/pos = anchor \+ blade/);
+    expect(roseCode).not.toMatch(/pos\.xz = mat2/);
     // 显现从叶柄向叶梢（ua 顺序），不走花冠的屏幕径向 dist01
     expect(roseCode).toMatch(/appear \* 1\.4 - ua/);
   });

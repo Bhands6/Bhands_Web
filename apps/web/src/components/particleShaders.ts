@@ -1203,17 +1203,17 @@ void main(){
       float roll = sin(uGalaxyAge * 0.6 + j * 2.6) * 0.6;
       float acrossR = across * cos(roll) - zrel * sin(roll);
       float zr = across * sin(roll) + zrel * cos(roll);
-      // 锚在茎下部两侧；世界 y 翻转（原始 y 向下 → 世界 y 向上）
-      vec3 anchor = vec3((j * 2.0 - 1.0) * 0.16, -1.30, 0.0);
-      pos = anchor
-          + vec3(along * dirN.x, -along * dirN.y, 0.0) * ROSE_LEAF_SCALE
-          + vec3(acrossR * dirW.x, -acrossR * dirW.y, 0.0) * ROSE_LEAF_SCALE
-          + vec3(0.0, 0.0, zr) * ROSE_LEAF_SCALE;
-      // 绕茎公转（真 3D 透视）
+      // 叶根钉在茎干上（固定不动）；叶片相对叶根构造后绕**过叶根的竖直轴**旋转——
+      // 叶根不脱离茎、叶梢绕根转圈（用户明确：旋转轴心 = 叶子在茎干上的根位置）
+      vec3 anchor = vec3((j * 2.0 - 1.0) * 0.08, -1.30, 0.0);
+      vec3 blade = vec3(along * dirN.x, -along * dirN.y, 0.0) * ROSE_LEAF_SCALE
+                 + vec3(acrossR * dirW.x, -acrossR * dirW.y, 0.0) * ROSE_LEAF_SCALE
+                 + vec3(0.0, 0.0, zr) * ROSE_LEAF_SCALE;
       float leafOrb = uGalaxyAge * ROSE_LEAF_ORBIT;
       float oc = cos(leafOrb);
       float os2 = sin(leafOrb);
-      pos.xz = mat2(oc, -os2, os2, oc) * pos.xz;
+      blade.xz = mat2(oc, -os2, os2, oc) * blade.xz;
+      pos = anchor + blade;
       // 颜色（原公式，静态 ua 代入）
       float w1 = ub * ROSE_H;
       rC = 0.4 - ua * 0.1
