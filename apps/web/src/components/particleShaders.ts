@@ -1202,9 +1202,9 @@ void main(){
           (pz - 888.0) * ROSE_DEPTH_SCALE
         );
 
-        // ---- 节拍微缩放 + 显现（花心向外渐次绽放，屏幕径向排序同原版）----
+        // ---- 节拍微缩放 + 显现（花心向外渐次绽放，径向以花冠轴心为基准，同原版排序）----
         pos *= 1.0 + uBeat * 0.03;
-        float dist01 = clamp(length(vec2(pxs - 320.0, pys - 240.0)) / ROSE_DIST_NORM, 0.0, 1.0);
+        float dist01 = clamp(length(vec2(pxs - ROSE_LEAF_CENTER.x, pys - ROSE_LEAF_CENTER.y)) / ROSE_DIST_NORM, 0.0, 1.0);
         float bloomIn = clamp((appear * 1.25 - dist01) * 5.0, 0.0, 1.0);
 
         // ---- 颜色：v 整数时 ~(v)&0xFF = mod(255-v, 256)（先 trunc 再取模，GLSL mod 恒非负）----
