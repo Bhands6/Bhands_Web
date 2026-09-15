@@ -1095,9 +1095,12 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).toMatch(/A \* A \+ B \* B < 1\.0/);
   });
 
-  it('叶子公转：两片叶（37<c≤60）绕屏幕花心缓转，且在出框检测前生效', () => {
+  it('叶子公转：两片叶（37<c≤60）绕**花冠轴心**缓转（与花冠涡旋同轴），且在出框检测前生效', () => {
     expect(roseCode).toMatch(/float isLeaf = step\(37\.0, cc\) \* \(1\.0 - step\(60\.0, cc\)\)/);
     expect(roseCode).toMatch(/uGalaxyAge \* ROSE_LEAF_ORBIT/);
+    // 公转轴必须 = 花冠涡旋的轴心（ROSE_LEAF_CENTER，花冠投影质心），不能是画布中心（不同心，用户否决）
+    expect(roseCode).toMatch(/ROSE_LEAF_CENTER\.x/);
+    expect(roseCode).not.toMatch(/pxs - 320\.0/);
     // isLeaf 旋转必须出现在出框 step 检测之前（旋转后位置才参与出框判定）
     expect(roseCode.indexOf('ROSE_LEAF_ORBIT'))
       .toBeLessThan(roseCode.indexOf('inFrame'));
