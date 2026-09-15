@@ -48,6 +48,14 @@ export interface AlbumDetailData {
   tracks: SongItem[];
 }
 
+/** 网易官方推荐歌单（personalized，游客可用，每次轮换） */
+export interface PersonalizedPlaylistItem {
+  id: string;
+  name: string;
+  cover: string;
+  playCount: number;
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -88,5 +96,10 @@ export const musicApi = {
   /** 专辑详情（新碟点开即播，游客可用） */
   async getAlbumDetail(id: string): Promise<ApiResponse<AlbumDetailData>> {
     return apiClient.get(`/music/album/${id}`);
+  },
+
+  /** 网易官方推荐歌单（免登录模式「推荐歌单」数据源，游客可用，每次轮换） */
+  async getPersonalizedPlaylists(): Promise<ApiResponse<PersonalizedPlaylistItem[]>> {
+    return apiClient.get('/music/personalized');
   }
 };

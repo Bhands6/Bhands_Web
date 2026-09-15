@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { musicApi, SongItem, AlbumItem } from '../api/music';
+import { musicApi, SongItem, AlbumItem, PersonalizedPlaylistItem } from '../api/music';
 import { weatherApi, WeatherInfo } from '../api/weather';
 import { useUIStore } from '../stores/useUIStore';
 import { useUserStore } from '../stores/useUserStore';
@@ -144,6 +144,32 @@ export default function HomeStage() {
     if (loggedIn || !guestUnlocked) return;
     loadGuestAlbums();
   }, [loggedIn, guestUnlocked]);
+
+  // 免登录模式：网易官方推荐歌单（personalized，游客可用，每次轮换）——「我的歌单」位的替代内容
+  const [guestPlaylists, setGuestPlaylists] = useState<PersonalizedPlaylistItem[]>([]);
+  const [guestPlaylistsFailed, setGuestPlaylistsFailed] = useState(false);
+  const loadGuestPlaylists = async () => {
+    setGuestPlaylistsFailed(false);
+    try {
+      const res = await musicApi.getPersonalizedPlaylists();
+      if (res.success && (res.data || []).length) {
+        setGuestPlaylists(res.data || []);
+      } else {
+        setGuestPlaylistsFailed(true);
+      }
+    } catch {
+      setGuestPlaylistsFailed(true);
+    }
+  };
+  useEffect(() => {
+    if (loggedIn || !guestUnlocked) return;
+    loadGuestPlaylists();
+  }, [loggedIn, guestUnlocked]);
+
+  // 免登录：播放一个推荐歌单（整单入队）
+  const playGuestPlaylist = async (p: PersonalizedPlaylistItem) => {
+    await playPlaylist(p.id, p.name);
+  };
 
   // 拉取当前城市天气
   useEffect(() => {
@@ -469,13 +495,49 @@ export default function HomeStage() {
 
         {/* 快捷卡片 */}
         <div className="home-grid">
-          <button className="home-card" data-home-tone="library" type="button" onClick={openMyPlaylists}>
+          <button
+            className="home-card"
+            data-home-tone="library"
+            type="button"
+            onClick={() => {
+              // 免登录模式：推荐歌单（随机一张整单播放）；失败态点击 = 重试
+              if (!loggedIn && guestUnlocked) {
+                if (guestPlaylistsFailed) {
+                  showToast('正在重新加载推荐歌单…');
+                  loadGuestPlaylists();
+                  return;
+                }
+                if (guestPlaylists.length) {
+                  const pick = guestPlaylists[Math.floor(Math.random() * guestPlaylists.length)];
+                  playGuestPlaylist(pick);
+                  return;
+                }
+                showToast('推荐歌单加载中，稍后再试');
+                return;
+              }
+              openMyPlaylists();
+            }}
+          >
             <div className="home-card-label">Library</div>
-            <div className="home-card-title">我的歌单</div>
-            <div className="home-card-sub">{loggedIn ? '打开左侧歌单库' : '登录后查看网易云歌单'}</div>
+            <div className="home-card-title">{loggedIn || !guestUnlocked ? '我的歌单' : '推荐歌单'}</div>
+            <div className="home-card-sub">
+              {loggedIn
+                ? '打开左侧歌单库'
+                : guestUnlocked
+                  ? (guestPlaylists.length
+                      ? '网易官方推荐 · 点击随机播放'
+                      : guestPlaylistsFailed
+                        ? '推荐歌单加载失败 · 点击重试'
+                        : '网易官方推荐加载中…')
+                  : '登录后查看网易云歌单'}
+            </div>
             <div
-              className={`home-card-art${playlistCover ? ' has-cover' : ''}`}
-              style={playlistCover ? { backgroundImage: `url(${playlistCover})` } : undefined}
+              className={`home-card-art${(loggedIn ? playlistCover : guestUnlocked ? (guestPlaylists.find((p) => p.cover)?.cover || '') : '') ? ' has-cover' : ''}`}
+              style={
+                (loggedIn ? playlistCover : guestUnlocked ? (guestPlaylists.find((p) => p.cover)?.cover || '') : '')
+                  ? { backgroundImage: `url(${loggedIn ? playlistCover : guestUnlocked ? (guestPlaylists.find((p) => p.cover)?.cover || '') : ''})` }
+                  : undefined
+              }
             />
           </button>
 
@@ -576,6 +638,41 @@ export default function HomeStage() {
                       <span className="home-tile-queue-num">♪</span>
                       <span className="home-tile-queue-name">{a.artist}</span>
                       <span className="home-tile-queue-artist">{a.size} 首</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 免登录模式：推荐歌单横栏（网易官方 personalized，每次轮换，点卡片整单播放） */}
+        {!loggedIn && guestUnlocked && guestPlaylists.length > 0 && (
+          <div className="home-rail">
+            <div className="home-section-head">
+              <div className="home-section-title">推荐歌单</div>
+              <div className="home-section-note">网易官方推荐 · 每次刷新不同</div>
+            </div>
+            <div id="home-tile-row" className="home-tile-row">
+              {guestPlaylists.map((p) => (
+                <button
+                  key={p.id}
+                  className="home-tile home-tile--queue"
+                  data-home-tone="playlist"
+                  type="button"
+                  onClick={() => playGuestPlaylist(p)}
+                  title={`${p.name} · 播放 ${p.playCount} 次`}
+                >
+                  <div
+                    className={`home-tile-cover${p.cover ? ' has-cover' : ''}`}
+                    style={p.cover ? { backgroundImage: `url(${p.cover})` } : undefined}
+                  />
+                  <div className="home-tile-title">{p.name}</div>
+                  <div className="home-tile-queue">
+                    <div className="home-tile-queue-item">
+                      <span className="home-tile-queue-num">♫</span>
+                      <span className="home-tile-queue-name">官方推荐歌单</span>
+                      <span className="home-tile-queue-artist">{p.playCount > 10000 ? `${Math.round(p.playCount / 10000)}万` : p.playCount} 次播放</span>
                     </div>
                   </div>
                 </button>

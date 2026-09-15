@@ -499,6 +499,27 @@ export async function musicRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // 网易官方推荐歌单（personalized，游客可用，每次返回约 6 个且内容轮换）——
+  // 免登录模式主页「推荐歌单」数据源
+  fastify.get('/personalized', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!limitedByIp(request, 'personalized', 20, 60_000)) {
+      return reply.status(429).send({ success: false, error: '请求过于频繁，请稍后再试' });
+    }
+    try {
+      const res = await NcmApi.personalized({ limit: 6 });
+      const lists = (res.body?.result || []).map((p: any) => ({
+        id: String(p.id),
+        name: p.name || '',
+        cover: p.picUrl || '',
+        playCount: p.playCount || 0
+      }));
+      return { success: true, data: lists };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: '获取推荐歌单失败' });
+    }
+  });
+
   // 专辑详情（游客可用）：免登录模式点开新碟即播
   fastify.get('/album/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
