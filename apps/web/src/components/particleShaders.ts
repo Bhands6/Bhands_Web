@@ -146,6 +146,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 叶子已移除（用户定稿）：叶粒子随花冠走投影路径，构成完整剪影。
 #define ROSE_LEAF_CENTER vec2(325.0, 210.0) // 花冠轴心（质心采样测定）：花冠放大与绽放 dist01 的基准
 #define ROSE_CROWN_SCALE 1.22  // 花冠整体放大系数（花瓣更显眼，茎/萼比例不变）
+#define ROSE_CROWN_SHARE 0.80  // 花冠粒子配额（0.80 = 80% 粒子给花瓣，其余给花萼+枝干；均匀时花冠仅 61%）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1095,7 +1096,14 @@ void main(){
     // ---- 花瓣涡旋自旋（原版做法）：a 参数域随时间平移，花瓣图案绕花心流动 ----
     float ra = fract(aUv.x + uGalaxyAge * ROSE_SPIN_DOMAIN);
     float rb = aUv.y;
-    float cc = floor(hash11(aRand * 97.0) * ROSE_LAYERS) / 0.74;
+    // 层配额分布（2026-09-15 用户调优）：均匀撒时花冠只占 28/46≈61%、花萼占 37%——
+    // 花瓣显稀。改为按 ROSE_CROWN_SHARE 分配：花冠（层 0..27）拿大头，其余给花萼+枝干
+    //（层 28..45，floor 到 45 即 cc≈60.8 枝干，份额自然保留）。
+    float layerRnd = hash11(aRand * 97.0);
+    float layerF = layerRnd < ROSE_CROWN_SHARE
+      ? (layerRnd / ROSE_CROWN_SHARE) * 28.0
+      : 28.0 + ((layerRnd - ROSE_CROWN_SHARE) / (1.0 - ROSE_CROWN_SHARE)) * 18.0;
+    float cc = floor(layerF) / 0.74;
     // 参数域边缘渐隐（粒子周期性穿过 wrap 边界：出域前淡出、回绕后淡入，治低密度闪点）
     float edgeFade = smoothstep(0.0, ROSE_WRAP_FADE, min(ra, 1.0 - ra));
 
