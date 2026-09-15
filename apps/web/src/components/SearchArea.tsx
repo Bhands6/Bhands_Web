@@ -107,7 +107,7 @@ export default function SearchArea() {
       />
       <div
         id="search-area"
-        className={`${revealed ? 'peek' : ''}${query || results.length ? ' has-results' : ''}`}
+        className={`${revealed ? 'peek' : ''}${query || results.length ? ' has-results' : ''}${showResults ? ' results-open' : ''}`}
         onMouseEnter={hoverEnter}
         onMouseLeave={hoverLeave}
       >

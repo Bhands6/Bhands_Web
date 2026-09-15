@@ -193,6 +193,9 @@ body.splash-active.splash-revealing #top-right{opacity:1;transition:opacity 1100
 #search-area{--search-offset:0px;position:fixed;z-index:10;top:-76px;left:50%;transform:translateX(calc(-50% + var(--search-offset)));width:auto;display:flex;align-items:flex-start;gap:12px;transition:top .45s cubic-bezier(.2,.7,.2,1),opacity .35s,transform .35s cubic-bezier(.2,.7,.2,1);opacity:0;pointer-events:none}
 #search-area.has-cover-action{--search-offset:0px}
 #search-area.peek{top:24px;opacity:1;pointer-events:auto}
+/* 搜索下拉（结果/历史）展开时：它是交互浮层，必须盖过舞台歌词(z40)与队列面板(z42)，
+   否则下半段结果被歌词遮挡且不可点（歌词 .show 时 pointer-events:auto 会吃掉点击） */
+#search-area.results-open{z-index:45}
 #search-area.stage-mode #search-stack{width:min(360px,52vw)}
 #search-area.stage-mode.peek{top:18px}
 #search-stack{width:min(520px,58vw)}
