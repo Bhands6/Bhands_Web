@@ -122,23 +122,28 @@ export default function HomeStage() {
     return () => { cancelled = true; };
   }, [loggedIn]);
 
-  // 免登录模式：热门新碟（网易云「新碟上架」，游客可用）——每日推荐位的数据源
-  // 激活免登录模式（点「不登录听歌」）后才开始拉取
+  // 免登录模式：热门新碟（网易云「新碟上架」，游客可用）——每日推荐位的数据源。
+  // 激活免登录模式（点「免登录听歌」）后才开始拉取；失败/空数据进 failed 态提供重试（防「假加载中」）
   const [guestAlbums, setGuestAlbums] = useState<AlbumItem[]>([]);
   const [guestAlbumLoading, setGuestAlbumLoading] = useState(false);
+  const [guestAlbumsFailed, setGuestAlbumsFailed] = useState(false);
+  const loadGuestAlbums = async () => {
+    setGuestAlbumsFailed(false);
+    try {
+      const res = await musicApi.getTopAlbums();
+      if (res.success && (res.data || []).length) {
+        setGuestAlbums(res.data || []);
+      } else {
+        setGuestAlbumsFailed(true);
+      }
+    } catch {
+      setGuestAlbumsFailed(true);
+    }
+  };
   useEffect(() => {
     if (loggedIn || !guestUnlocked) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await musicApi.getTopAlbums();
-        if (!cancelled && res.success) setGuestAlbums(res.data || []);
-      } catch {
-        // 静默，新碟横栏不显示
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [loggedIn]);
+    loadGuestAlbums();
+  }, [loggedIn, guestUnlocked]);
 
   // 拉取当前城市天气
   useEffect(() => {
@@ -225,6 +230,12 @@ export default function HomeStage() {
       return;
     }
     if (!loggedIn) {
+      // 新碟拉取失败时点击 = 重试（而非弹「加载中」提示）
+      if (guestAlbumsFailed) {
+        showToast('正在重新加载热门新碟…');
+        loadGuestAlbums();
+        return;
+      }
       playGuestAlbumPick(shuffle);
       return;
     }
@@ -412,7 +423,9 @@ export default function HomeStage() {
                 : guestUnlocked
                   ? (guestAlbums.length
                       ? `网易云最新专辑 · ${guestAlbums[0].name}`
-                      : '网易云最新专辑加载中…')
+                      : guestAlbumsFailed
+                        ? '新碟加载失败 · 点击卡片重试'
+                        : '网易云最新专辑加载中…')
                   : '登录后同步你的今日歌曲'}
             </div>
             <div className="home-hero-actions">
