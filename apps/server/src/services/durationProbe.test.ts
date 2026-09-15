@@ -174,4 +174,15 @@ describe('acceptProbe（候选音源放行/拒绝）', () => {
     expect(acceptProbe({ status: 'ok', kind: 'mp3', durationSec: 296, totalBytes: 0 }, 296_000)).toBe(true);
     expect(acceptProbe({ status: 'ok', kind: 'mp4', durationSec: 72, totalBytes: 0 }, 296_000)).toBe(false);
   });
+
+  it('碎片/广告垫片防御：期望 ≥90s 的歌，候选 <400KB 一律拒绝（Pretty Ugly kuwo 11s 垫片案例）', () => {
+    // kuwo 广告垫片：11s / 185KB，24kbps 帧头反推出 61.8s 伪时长骗过容差 → 大小一票否决
+    expect(acceptProbe({ status: 'ok', kind: 'mp3', durationSec: 61.8, totalBytes: 185_336 }, 60_000 * 1.5)).toBe(false);
+    // 期望 ≥90s 但 totalBytes=0（未知）→ 不触发大小检查，走时长判定
+    expect(acceptProbe({ status: 'ok', kind: 'mp3', durationSec: 296, totalBytes: 0 }, 296_000)).toBe(true);
+    // 期望 <90s（短歌/试听）→ 不触发大小检查
+    expect(acceptProbe({ status: 'ok', kind: 'mp3', durationSec: 60, totalBytes: 185_336 }, 60_000)).toBe(true);
+    // 正常大小 + 时长匹配 → 放行
+    expect(acceptProbe({ status: 'ok', kind: 'mp3', durationSec: 296, totalBytes: 4_800_000 }, 296_000)).toBe(true);
+  });
 });

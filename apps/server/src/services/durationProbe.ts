@@ -246,7 +246,13 @@ export function isDurationPlausible(actualSec: number | null, expectedMs: number
  */
 export function acceptProbe(r: ProbeResult, expectedMs: number): boolean {
   if (r.status === 'not-audio') return false;
-  if (r.status === 'unreachable' || r.status === 'audio') return true;
+  if (r.status === 'unreachable') return true;
+  // 碎片/广告垫片防御：期望较长的歌，候选文件小得离谱 → 必是碎片/广告，按绝对大小拒绝。
+  // 实战案例（2026-09-15 Pretty Ugly）：kuwo 免费试听垫片 11 秒 / 185KB，但帧头声明 24kbps
+  // 低码率 → 大小/码率反推出 61.8s「伪时长」，恰好骗过 60s 试听版 dt 的容差校验被放行。
+  // 400KB ≈ 128kbps 下 25 秒；期望 ≥90s 的歌不可能只有这点数据。此检查不依赖码率解析。
+  if (expectedMs >= 90_000 && r.totalBytes > 0 && r.totalBytes < 400_000) return false;
+  if (r.status === 'audio') return true;
   return isDurationPlausible(r.durationSec, expectedMs);
 }
 

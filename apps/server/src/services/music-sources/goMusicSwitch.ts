@@ -68,6 +68,15 @@ export async function tryGoMusicSwitch(p: ParseParams): Promise<{ url: string; s
     failedCache.set(key, Date.now());
     return null;
   }
+  // ②' 歌手一致性校验：候选歌手与期望歌手无交集 → 同名错配（实战：Pretty Ugly 匹配到
+  // Saint Vane 的同名歌，score 0.73 放出去用户会听到「别人的歌」）。包含式比较兼容
+  // 「i-dle」vs「(G)I-DLE」这类写法差异。
+  const candArtist = String(cand.artist || '').trim().toLowerCase();
+  const wantArtists = (p.artists || []).map((a) => String(a).trim().toLowerCase()).filter(Boolean);
+  if (wantArtists.length && candArtist && !wantArtists.some((a) => candArtist.includes(a) || a.includes(candArtist))) {
+    failedCache.set(key, Date.now());
+    return null;
+  }
 
   // ③ 直链
   const u = await getJson(`${GO_MUSIC_API}/api/v1/music/url?source=${cand.source}&id=${cand.id}&quality=${br}`, URL_TIMEOUT);
