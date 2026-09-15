@@ -30,7 +30,7 @@
 
 | | | |
 |:---:|:---:|:---:|
-| ![](docs/screenshots/04-player-photo-lyrics.jpg)<br>**音谱** |![](docs/screenshots/05-fx-meteor.jpg)<br>**流星** | ![](docs/screenshots/06-fx-universe.jpg)<br>**寰宇** | 
+| ![](docs/screenshots/04-player-photo-lyrics.jpg)<br>**丝绸** |![](docs/screenshots/05-fx-meteor.jpg)<br>**流星** | ![](docs/screenshots/06-fx-universe.jpg)<br>**寰宇** | 
 | ![](docs/screenshots/07-fx-vacuum.png)<br>**真空** |![](docs/screenshots/08-fx-photo.jpg)<br>**照片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**银河** | 
 | ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | 
 | ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** |
@@ -126,7 +126,6 @@ docker compose build
 docker compose --profile caddy up -d
 ```
 
-维护者可使用 `deploy.bat [build|upload|all]` 一键完成「本地构建 → 上传 → 远程重建」。
 
 ### 音频 302 直连
 
@@ -195,13 +194,9 @@ Bhands_Web/
 1. 在 `apps/web/src/stores/` 创建 Zustand store
 2. 在组件中使用 `useStore` hook
 
-## 🤝 贡献指南
+### 第三方音乐平台说明
 
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+第三方平台接入仅用于个人学习、本地客户端体验和用户自有账号的播放辅助。请遵守对应平台的用户协议、版权规则和会员权益规则。
 
 ## 📄 许可证
 
