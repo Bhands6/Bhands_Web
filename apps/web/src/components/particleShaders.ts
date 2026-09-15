@@ -148,7 +148,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define ROSE_CROWN_SCALE 1.22  // 花冠整体放大系数（花瓣更显眼，茎/萼比例不变）
 #define ROSE_CROWN_SHARE 0.88  // 花冠粒子配额（0.88 = 88% 粒子给花瓣；0.80 仍嫌少上调，均匀时仅 61%）
 #define ROSE_MINI_SHARE  0.16  // 小玫瑰群粒子占比（16% 粒子分给 4 朵漂浮小玫瑰，其余归主玫瑰）
-#define ROSE_MINI_COUNT  4.0   // 小玫瑰朵数（左右两侧各 2 朵，独立相位/缩放/漂浮）
+#define ROSE_MINI_COUNT  8.0   // 小玫瑰朵数（左右两侧各 4 朵，独立相位/缩放/漂浮）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1245,7 +1245,7 @@ void main(){
           // 朝向变化只由 mang 自旋承担（用户验收：自旋对，漂浮别带旋转）
           vec2 mcenter = vec2(
             side * (4.25 + ih * 0.9) + sin(uGalaxyAge * (0.17 + ih * 0.13) + miniIdx * 2.61) * 0.55,
-            -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - 2.5) * 0.45
+            -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - (ROSE_MINI_COUNT + 1.0) * 0.5) * 0.30
           );
           // 负号 = 与主玫瑰花瓣涡旋同向（用户验收定方向）
           // 无自旋（用户定稿）：小玫瑰朝向固定正对镜头，运动只有平移漂浮 + z 空间游动
