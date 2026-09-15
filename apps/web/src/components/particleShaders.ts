@@ -147,6 +147,8 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define ROSE_LEAF_CENTER vec2(325.0, 210.0) // 花冠轴心（质心采样测定）：花冠放大与绽放 dist01 的基准
 #define ROSE_CROWN_SCALE 1.22  // 花冠整体放大系数（花瓣更显眼，茎/萼比例不变）
 #define ROSE_CROWN_SHARE 0.88  // 花冠粒子配额（0.88 = 88% 粒子给花瓣；0.80 仍嫌少上调，均匀时仅 61%）
+#define ROSE_MINI_SHARE  0.16  // 小玫瑰群粒子占比（16% 粒子分给 4 朵漂浮小玫瑰，其余归主玫瑰）
+#define ROSE_MINI_COUNT  4.0   // 小玫瑰朵数（左右两侧各 2 朵，独立相位/缩放/漂浮）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1093,13 +1095,25 @@ void main(){
     float appearRaw = clamp(uGalaxyAge / ROSE_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
 
+    // ---- 小玫瑰群分桶（2026-09-15）：aRand 决定粒子归属——主玫瑰 / 4 朵小玫瑰 ----
+    // 小玫瑰复用同一套 calc 公式（形状同源），但参数域用各自独立的 hash（彼此形状不同），
+    // 位置/缩放/自旋/漂浮由实例变换（分支尾）施加。ROSE_MINI_SHARE 比例的粒子归小玫瑰群。
+    float bucketRnd = hash11(aRand * 31.7);
+    float miniIdx = bucketRnd < ROSE_MINI_SHARE
+      ? floor((bucketRnd / ROSE_MINI_SHARE) * ROSE_MINI_COUNT) + 1.0
+      : 0.0;
+    bool isMini = miniIdx > 0.5;
+
     // ---- 花瓣涡旋自旋（原版做法）：a 参数域随时间平移，花瓣图案绕花心流动 ----
-    float ra = fract(aUv.x + uGalaxyAge * ROSE_SPIN_DOMAIN);
-    float rb = aUv.y;
+    // 小玫瑰粒子用自己 hash 的参数域（同一自旋速度，保证花瓣涡旋同步感）
+    float ra = fract(
+      (isMini ? hash11(aRand * 13.1 + miniIdx * 7.3) : aUv.x) + uGalaxyAge * ROSE_SPIN_DOMAIN
+    );
+    float rb = isMini ? hash11(aRand * 17.3 + miniIdx * 11.9) : aUv.y;
     // 层配额分布（2026-09-15 用户调优）：均匀撒时花冠只占 28/46≈61%、花萼占 37%——
     // 花瓣显稀。改为按 ROSE_CROWN_SHARE 分配：花冠（层 0..27）拿大头，其余给花萼+枝干
     //（层 28..45，floor 到 45 即 cc≈60.8 枝干，份额自然保留）。
-    float layerRnd = hash11(aRand * 97.0);
+    float layerRnd = isMini ? hash11(aRand * 23.7 + miniIdx * 5.1) : hash11(aRand * 97.0);
     float layerF = layerRnd < ROSE_CROWN_SHARE
       ? (layerRnd / ROSE_CROWN_SHARE) * 28.0
       : 28.0 + ((layerRnd - ROSE_CROWN_SHARE) / (1.0 - ROSE_CROWN_SHARE)) * 18.0;
@@ -1221,6 +1235,24 @@ void main(){
         // 显现期按 bloomIn 淡入；边缘渐隐治涡旋回绕闪点；音频只进亮度（工作流 4.7③）
         vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10) * edgeFade;
         maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uMid * 0.03);
+
+        // ---- 小玫瑰实例变换：把「局部玫瑰坐标」搬到各自位置/缩放/自旋/漂浮 ----
+        if (isMini) {
+          float ih = hash11(miniIdx * 3.77);
+          float side = mod(miniIdx, 2.0) < 1.0 ? -1.0 : 1.0;      // 左右两侧交替分布
+          float scl = 0.16 + ih * 0.10;                            // 缩放 0.16~0.26（世界高约 0.8~1.4）
+          vec2 mcenter = vec2(
+            side * (4.25 + ih * 0.9),
+            -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - 2.5) * 0.45
+          );
+          float mang = uGalaxyAge * (0.30 + ih * 0.22) + miniIdx * 2.13;
+          float mcs = cos(mang);
+          float msn = sin(mang);
+          pos.xy = mcenter + mat2(mcs, -msn, msn, mcs) * (pos.xy * scl);
+          pos.z *= scl;
+          // 小玫瑰独立显现（主玫瑰的 dist01/bloomIn 对它们无意义）：随切入 appear 渐入
+          vAlpha = appear * (0.78 + 0.22 * appear) * (1.0 + uBass * 0.10);
+        }
       }
     }
   }

@@ -1084,8 +1084,9 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
   it('花瓣涡旋自旋（原版做法）必须齐备：参数域平移 + 回绕渐隐，相位从切入预设起算', () => {
     expect(roseCode).toMatch(/uGalaxyAge \/ ROSE_APPEAR/);
     expect(roseCode).toMatch(/1\.0 - pow\(1\.0 - appearRaw, 3\.0\)/);
-    // 自旋 = 参数域 a 平移（花形竖直、花瓣图案流动），不是刚体旋转（整朵会转歪，用户截图否决）
-    expect(roseCode).toMatch(/fract\(aUv\.x \+ uGalaxyAge \* ROSE_SPIN_DOMAIN\)/);
+    // 自旋 = 参数域 a 平移（花形竖直、花瓣图案流动），不是刚体旋转（整朵会转歪，用户截图否决）。
+    // 主玫瑰用 aUv.x，小玫瑰（miniIdx>0）用各自 hash 域——两者都乘同一 ROSE_SPIN_DOMAIN 平移
+    expect(roseCode).toMatch(/\)\s*\+\s*uGalaxyAge \* ROSE_SPIN_DOMAIN/);
     expect(roseCode).not.toMatch(/mat2\(cs_/);
     // 回绕渐隐：参数域边缘 6% 线性淡出，治低密度下的跳变闪点
     expect(roseCode).toMatch(/smoothstep\(0\.0, ROSE_WRAP_FADE, min\(ra, 1\.0 - ra\)\)/);
@@ -1103,6 +1104,17 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     expect(roseCode).not.toMatch(/isLeafRaw|ROSE_LEAF_ORBIT|ROSE_LEAF_SCALE/);
     // 花冠显现径向基准（花冠轴心）保留
     expect(roseCode).toMatch(/ROSE_LEAF_CENTER/);
+  });
+
+  it('小玫瑰群：aRand 分桶出 4 朵漂浮小玫瑰，复用 calc 公式 + 实例变换，独立显现', () => {
+    // 分桶：bucketRnd < ROSE_MINI_SHARE → miniIdx 1..4，其余归主玫瑰
+    expect(roseCode).toMatch(/bucketRnd < ROSE_MINI_SHARE/);
+    expect(roseCode).toMatch(/floor\(\(bucketRnd \/ ROSE_MINI_SHARE\) \* ROSE_MINI_COUNT\) \+ 1\.0/);
+    // 小玫瑰参数域用各自 hash（同公式不同粒子分布），层配额分布共用
+    expect(roseCode).toMatch(/isMini \? hash11\(aRand \* 13\.1 \+ miniIdx \* 7\.3\) : aUv\.x/);
+    // 实例变换在 vAlpha 之后：位置/缩放/自旋/漂浮 + 独立 appear 渐入
+    expect(roseCode).toMatch(/pos\.xy = mcenter \+ mat2\(mcs, -msn, msn, mcs\) \* \(pos\.xy \* scl\)/);
+    expect(roseCode).toMatch(/vAlpha = appear \* \(0\.78 \+ 0\.22 \* appear\)/);
   });
 
   it('泛光层自动派生包含玫瑰分支（deriveBloomVertexShader 以 VERTEX_SHADER 为源）', () => {
