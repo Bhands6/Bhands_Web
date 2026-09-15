@@ -1236,19 +1236,22 @@ void main(){
         vAlpha = bloomIn * (0.85 + 0.15 * appear) * (1.0 + uBass * 0.10) * edgeFade;
         maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uMid * 0.03);
 
-        // ---- 小玫瑰实例变换：把「局部玫瑰坐标」搬到各自位置/缩放/自旋/漂浮 ----
+        // ---- 小玫瑰实例变换：把「局部玫瑰坐标」搬到各自位置/缩放/漂浮 ----
         if (isMini) {
           float ih = hash11(miniIdx * 3.77);
-          float side = mod(miniIdx, 2.0) < 1.0 ? -1.0 : 1.0;      // 左右两侧交替分布
           float scl = 0.16 + ih * 0.10;                            // 缩放 0.16~0.26（世界高约 0.8~1.4）
+          // 环绕分布（2026-09-15 用户定稿）：黄金角（≈137.5°）散开——全向环绕主玫瑰，不挤在左右两列；
+          // 椭圆环带适配 16:9：水平 3.8~5.1（避开主花、留 7.8 半宽余量），纵向 1.9~2.7
+          //（+漂移 0.75 后 ≤3.35，竖向半高 3.4 内）
+          float iAngle = ih * 2.39996;
+          float mrx = 3.8 + fract(ih * 7.3) * 1.3;
+          float mry = 1.9 + fract(ih * 3.1) * 0.8;
           // 漂浮 = 上下左右的平移（x/y 不同频率正弦的利萨如轨迹），位置平移不含旋转成分；
-          // 朝向变化只由 mang 自旋承担（用户验收：自旋对，漂浮别带旋转）
-          vec2 mcenter = vec2(
-            side * (4.25 + ih * 0.9) + sin(uGalaxyAge * (0.17 + ih * 0.13) + miniIdx * 2.61) * 0.55,
-            -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - (ROSE_MINI_COUNT + 1.0) * 0.5) * 0.30
-          );
-          // 负号 = 与主玫瑰花瓣涡旋同向（用户验收定方向）
           // 无自旋（用户定稿）：小玫瑰朝向固定正对镜头，运动只有平移漂浮 + z 空间游动
+          vec2 mcenter = vec2(
+            cos(iAngle) * mrx + sin(uGalaxyAge * (0.17 + ih * 0.13) + miniIdx * 2.61) * 0.55,
+            sin(iAngle) * mry - 0.2 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75
+          );
           pos.xy = mcenter + pos.xy * scl;
           // z 空间游动（像水母花）：前后漂移带来近大远小的透视感——「在空间里移动」而非贴屏滑动
           pos.z = pos.z * scl + sin(uGalaxyAge * (0.15 + ih * 0.11) + miniIdx * 1.37) * 1.15;
