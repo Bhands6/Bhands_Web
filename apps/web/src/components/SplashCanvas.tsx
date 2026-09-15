@@ -157,6 +157,9 @@ export default function SplashCanvas() {
 
     // 上下文属性与桌面版逐项一致。刻意不加 desynchronized 等额外标志：
     // 部分 Windows 驱动上 desynchronized 会导致"画布在渲染但合成器不更新"的画面冻结。
+    // powerPreference 用默认（2026-09-15）：high-performance 强制独显，某些驱动版本下
+    // context 创建后立即 lost——后续 createShader/compileShader 全部静默失败且 infoLog
+    // 为 null（用户实测「shader compile failed: null」）。启动动画用集显无感知差异。
     const setupWebgl = (target: HTMLCanvasElement): boolean => {
       let ctx: WebGLRenderingContext | null = null;
       try {
@@ -166,13 +169,18 @@ export default function SplashCanvas() {
           depth: false,
           stencil: false,
           premultipliedAlpha: false,
-          preserveDrawingBuffer: false,
-          powerPreference: 'high-performance'
+          preserveDrawingBuffer: false
         }) as WebGLRenderingContext | null;
       } catch {
         ctx = null;
       }
       if (!ctx) return false;
+      // 上下文创建即丢失（驱动/GPU 进程异常的标志）：直接放弃编译走 2D 兜底，
+      // 避免在 lost context 上反复空编译（createShader 全失败且拿不到任何错误信息）
+      if (typeof ctx.isContextLost === 'function' && ctx.isContextLost()) {
+        console.warn('[splash] webgl context lost at create — fallback to 2D');
+        return false;
+      }
 
       const compile = (type: number, source: string): WebGLShader | null => {
         const shader = ctx!.createShader(type)!;
