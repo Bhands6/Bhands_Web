@@ -585,7 +585,10 @@ export default function SplashCanvas() {
         try {
           if (buffer) gl.deleteBuffer(buffer);
           if (program) gl.deleteProgram(program);
-          gl.getExtension('WEBGL_lose_context')?.loseContext();
+          // ⚠️ 刻意不调 WEBGL_lose_context.loseContext()：同一 canvas 的 getContext 是单例——
+          // dev StrictMode 双跑 effect 时第二次 getContext 会返回这个已被显式丢弃的 context
+          //（永远 lost → shader 全静默失败）。canvas 移除 DOM 后 context 由 GC 自动回收，
+          // deleteBuffer/deleteProgram 已释放 context 内资源，无需显式丢弃 context 本身。
         } catch {
           // 忽略释放异常
         }
