@@ -177,9 +177,9 @@ export default function LoginModal() {
               setGuestUnlocked(true);
               setOpen(false);
             }}
-            title="不登录也能听：榜单、热门新碟均可直接播放"
+            title="免登录也能听：榜单、热门新碟均可直接播放"
           >
-            不登录听歌
+            免登录听歌
           </button>
           <button
             className="modal-btn primary"

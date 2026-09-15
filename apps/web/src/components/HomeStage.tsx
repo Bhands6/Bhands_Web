@@ -38,6 +38,7 @@ export default function HomeStage() {
 
   const loggedIn = useUserStore((s) => s.loggedIn);
   const guestUnlocked = useUserStore((s) => s.guestUnlocked);
+  const setGuestUnlocked = useUserStore((s) => s.setGuestUnlocked);
   // 免登录模式总开关：登录 或 点过「不登录听歌」——之后才拉取榜单/新碟并解锁播放
   const unlocked = loggedIn || guestUnlocked;
   const userPlaylists = useUserStore((s) => s.playlists);
@@ -385,7 +386,23 @@ export default function HomeStage() {
             style={heroCover ? { backgroundImage: `url(${heroCover})` } : undefined}
           />
           <div className="home-hero-cover-overlay" />
-          {!loggedIn && !guestUnlocked && <div className="home-hero-login-hint">请登录获取详细体验</div>}
+          {!loggedIn && !guestUnlocked && (
+            <div className="home-hero-login-hint" style={{ flexDirection: 'column', gap: 12 }}>
+              请登录获取详细体验
+              <button
+                className="home-chip home-console-chip"
+                type="button"
+                style={{ pointerEvents: 'auto' }}
+                onClick={(e) => {
+                  // 与登录弹窗「免登录听歌」同一逻辑：激活免登录模式（主页开始加载榜单与新碟）
+                  e.stopPropagation();
+                  setGuestUnlocked(true);
+                }}
+              >
+                免登录听歌
+              </button>
+            </div>
+          )}
           <div className="home-hero-bottom">
             <div className="home-card-label">{loggedIn ? 'Daily Mix' : guestUnlocked ? 'New Albums' : 'Daily Mix'}</div>
             <div className="home-card-title">{loggedIn || !guestUnlocked ? '每日推荐' : '热门新碟'}</div>
