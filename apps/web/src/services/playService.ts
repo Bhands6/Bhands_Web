@@ -285,6 +285,50 @@ function releaseOrphanedBlobUrls(): void {
   releaseBlobUrlsExcept(keep);
 }
 
+// ============================================================
+// 预解析下一首（2026-09-15）：顺序播放时当前歌开播后，后台悄悄解析队列
+// 下一首的地址并缓存——切歌时链接已在手，感知等待从 ~3s 降到接近 0。
+//
+// - TTL 8 分钟：外站直链含时效令牌（kuwo/QQ vkey 类），后端成功缓存 10 分钟，
+//   前端留 2 分钟余量；超龄缓存直接丢弃重新解析（走常规流程，最多慢不会错）。
+// - 只预解析 sequence 顺序模式（含末尾回首曲）；loop 单曲循环无需解析、
+//   shuffle 随机不可预测。
+// - 命中即取即删（一次性消费）；inflight 去重防止重复请求。
+// - 预解析失败静默（切歌时走常规解析兜底，与未预解析行为一致）。
+// ============================================================
+const PREPARSE_TTL = 8 * 60_000;
+const preparseCache = new Map<string, { url: string; trial: boolean; quality: string; at: number }>();
+const preparseInflight = new Map<string, Promise<void>>();
+
+/** 取预解析结果（命中即消费）；超龄视为未命中并清除 */
+function takePreparsed(id: string): { url: string; trial: boolean; quality: string } | null {
+  const hit = preparseCache.get(id);
+  if (!hit) return null;
+  preparseCache.delete(id);
+  if (Date.now() - hit.at > PREPARSE_TTL) return null;
+  return hit;
+}
+
+/** 当前歌播放成功后调用：预解析顺序模式的下一首 */
+function schedulePreparseNext(): void {
+  const { playlist, currentIndex, playMode } = usePlayerStore.getState();
+  if (playMode !== 'sequence' || !playlist.length) return;
+  const next = playlist[(currentIndex + 1) % playlist.length];
+  if (!next || next.id === usePlayerStore.getState().currentTrack?.id) return;
+  if (isDirectPlayableUrl(next.url) || preparseCache.has(next.id) || preparseInflight.has(next.id)) return;
+  const p = resolveTrackUrl(next.id)
+    .then((r) => {
+      if (r?.url) {
+        preparseCache.set(next.id, { url: r.url, trial: !!r.trial, quality: r.quality || '', at: Date.now() });
+      }
+    })
+    .catch(() => { /* 预解析失败静默，切歌时走常规解析 */ })
+    .finally(() => {
+      preparseInflight.delete(next.id);
+    });
+  preparseInflight.set(next.id, p);
+}
+
 export async function playTrack(
   track: AudioTrack,
   queue?: AudioTrack[],
@@ -321,14 +365,21 @@ async function doPlayTrack(
     player.setCurrentIndex(queueIndex);
   }
 
-  showToast(`正在解析「${track.name}」…`);
-
   // 已有可直连地址直接播放，否则（含旧版持久化的平台直链）重新解析
   let url = isDirectPlayableUrl(track.url) ? track.url : '';
   let trial = false;
   let parsedActual = ''; // 本次解析实际拿到的档位（仅用于降级提示；直链快照不提示）
   usePlayerStore.setState({ playingQuality: track.resolvedQuality || '' });
+  // 预解析缓存命中：链接已在手（上一首播放时后台解析的），跳过解析直接播，几乎瞬开
+  const pre = url ? null : takePreparsed(track.id);
+  if (pre) {
+    url = pre.url;
+    trial = pre.trial;
+    parsedActual = pre.quality;
+    if (parsedActual) usePlayerStore.setState({ playingQuality: parsedActual });
+  }
   if (!url) {
+    showToast(`正在解析「${track.name}」…`);
     const resolved = await resolveTrackUrl(track.id);
     if (token !== playToken) return; // 已被更新的播放请求取代
     if (!resolved) {
@@ -380,6 +431,8 @@ async function doPlayTrack(
     } catch { /* 不支持：忽略 */ }
     // 播放成功 → 该曲目的中断重试计数清零
     if (errRetryState.trackId === fullTrack.id) errRetryState.count = 0;
+    // 顺序播放：后台预解析队列下一首，切歌时秒开
+    schedulePreparseNext();
   };
 
   const loadAndFinish = async (): Promise<boolean> => {
