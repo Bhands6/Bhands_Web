@@ -1241,8 +1241,10 @@ void main(){
           float ih = hash11(miniIdx * 3.77);
           float side = mod(miniIdx, 2.0) < 1.0 ? -1.0 : 1.0;      // 左右两侧交替分布
           float scl = 0.16 + ih * 0.10;                            // 缩放 0.16~0.26（世界高约 0.8~1.4）
+          // 漂浮 = 上下左右的平移（x/y 不同频率正弦的利萨如轨迹），位置平移不含旋转成分；
+          // 朝向变化只由 mang 自旋承担（用户验收：自旋对，漂浮别带旋转）
           vec2 mcenter = vec2(
-            side * (4.25 + ih * 0.9),
+            side * (4.25 + ih * 0.9) + sin(uGalaxyAge * (0.17 + ih * 0.13) + miniIdx * 2.61) * 0.55,
             -0.4 + sin(uGalaxyAge * (0.22 + ih * 0.18) + miniIdx * 1.93) * 0.75 + (miniIdx - 2.5) * 0.45
           );
           // 负号 = 与主玫瑰花瓣涡旋同向（用户验收定方向）
