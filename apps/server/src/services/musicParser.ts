@@ -287,6 +287,10 @@ async function tryNcmOfficial(p: ParseParams, cookie?: string): Promise<ParseRes
   if (!cookie) chain = chain.filter(l => !VIP_LEVELS.includes(l));
   if (!chain.length) chain = ['standard'];
   let trialFallback: ParseResult | null = null;
+  // xeapi 新协议回退标记：Enhanced 版 song_url_v1 写死 xeapi 加密（需预注册密钥），
+  // 本环境注册失败（网易降级响应 missing sk）。老版 song_url 接口走 weapi 不需要 key，
+  // 且 br=999000 一次请求即返回「该账号可用的最高 ≤br 档位」，可整链替代降级循环。
+  let xeapiFellBack = false;
 
   for (const level of chain) {
     try {
@@ -302,6 +306,24 @@ async function tryNcmOfficial(p: ParseParams, cookie?: string): Promise<ParseRes
     } catch (err: any) {
       const msg = err?.body?.msg || err?.message || '';
       console.warn(`[MusicParser] NCM ${level} 失败:`, msg);
+      // xeapi 密钥缺失 → 回退老接口（weapi，br=999000 一次拿最高可用档），
+      // 返回体 info.level 为实际档位（standard/exhigh/lossless/hires/jymaster…）
+      if (!xeapiFellBack && msg.includes('xeapi public key')) {
+        xeapiFellBack = true;
+        try {
+          const legacy = await NcmApi.song_url({ id: p.id, br: 999000, cookie });
+          const info = legacy.body?.data?.[0];
+          if (info?.url && !info.freeTrialInfo) {
+            const lvl = info.level || 'exhigh';
+            return { url: PROXY(info.url), quality: 'netease-' + lvl, trial: false, size: info.size || 0, source: 'netease-' + lvl };
+          }
+          if (info?.url && info.freeTrialInfo && !trialFallback) {
+            trialFallback = { url: PROXY(info.url), quality: 'netease-trial', trial: true, size: info.size || 0, source: 'netease-trial' };
+          }
+        } catch (e2: any) {
+          console.warn('[MusicParser] NCM 老接口(weapi)回退失败:', e2?.message || e2);
+        }
+      }
       // ECONNRESET/502 = 连接被重置，短暂等待后重试下一级
       if (msg.includes('ECONNRESET') || msg.includes('502')) {
         await new Promise(r => setTimeout(r, 500));
