@@ -355,7 +355,7 @@ export default function ParticleStage() {
     // ---------- 玫瑰密度加成：切入玫瑰时粒子几何按 ROSE_GRID_BOOST 重建，切出还原 ----------
     // 重建是同步一次性（几万点的 Float32Array 生成毫秒级），转场脉冲掩盖切换闪烁；
     // 仅玫瑰预设需要更高密度（花瓣细颗粒质感），其余预设保持基础网格不动。
-    const ROSE_GRID_BOOST = 1.25;
+    const ROSE_GRID_BOOST = 1.5;
     const rebuildGeometry = (newGrid: number) => {
       if (newGrid === activeGrid) return;
       const old = geo;
