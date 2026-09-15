@@ -33,7 +33,6 @@ export default function HomeStage() {
   const showToast = useUIStore((s) => s.showToast);
   const setLoginModalOpen = useUIStore((s) => s.setLoginModalOpen);
   const setQueuePanelOpen = useUIStore((s) => s.setQueuePanelOpen);
-  const setQueuePanelAwaitHover = useUIStore((s) => s.setQueuePanelAwaitHover);
   const setQueueTab = useUIStore((s) => s.setQueueTab);
 
   const loggedIn = useUserStore((s) => s.loggedIn);
@@ -314,8 +313,9 @@ export default function HomeStage() {
     }
     setQueueTab('playlists');
     setQueuePanelOpen(true);
-    // 主页打开属于「顺带看一眼」：5s 内鼠标没移到面板上就自动收起，不挡住主页
-    setQueuePanelAwaitHover(true);
+    // 2026-09-15 用户定稿：主页打开不再 5s 自动收起（旧规则：鼠标没移入面板就收起，
+    // 但用户浏览歌单时鼠标常不在面板上，5 秒被误收）。面板常驻，与「点过按钮后
+    // 移开鼠标不收起」行为一致；关闭走底部「队列」按钮 toggle。
   };
 
   // 榜单卡片：整单入队直接播放，不弹队列面板（免登录模式解锁；未激活引导登录弹窗）

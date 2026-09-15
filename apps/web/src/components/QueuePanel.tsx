@@ -72,6 +72,7 @@ export default function QueuePanel() {
    * 开了面板但鼠标一直没移上去时，QUEUE_PANEL_AWAIT_HOVER_MS 后自动收起，
    * 避免面板长期挂在左侧挡住主页。鼠标一移入即由 hoverIntentEnter 清掉标志并取消计时。
    * 已固定（pinned）或非程序化打开（底部「队列」按钮、左缘悬停）都不参与自动收起。
+   * ⚠️ 2026-09-15 用户定稿：主页打开改为常驻（不再置位 awaitHover），当前无启用入口——逻辑保留备用。
    */
   useEffect(() => {
     if (!open || !awaitHover || pinned) return;

@@ -23,6 +23,8 @@ export const QUALITY_LABELS: Record<PlayQuality, string> = {
 /**
  * 「主页 → 我的歌单」打开面板后，等待鼠标移入的时间窗。
  * 超时仍未移入则自动收起，避免面板一直挂在左侧挡住主页内容。
+ * ⚠️ 2026-09-15 用户定稿：主页打开改为常驻（不再自动收起），当前无入口置位——
+ * 机制保留备用（未来若有「临时瞄一眼」类入口可复用）。
  */
 export const QUEUE_PANEL_AWAIT_HOVER_MS = 5000;
 
@@ -45,6 +47,7 @@ interface UIState {
    * 若在 QUEUE_PANEL_AWAIT_HOVER_MS 内鼠标始终没移到面板上，就自动收起。
    * 目的是避免面板一直挂在左侧挡住主页；底部「队列」按钮打开时不置位（保持常驻）。
    * 鼠标进入面板（或左缘热区）会立即清掉该标志，按原有常驻逻辑留在屏幕上。
+   * ⚠️ 2026-09-15 用户定稿：主页打开不再置位（面板常驻），当前无启用入口——机制保留备用。
    */
   queuePanelAwaitHover: boolean;
   queueTab: 'queue' | 'playlists';
