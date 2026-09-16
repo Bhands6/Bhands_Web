@@ -6,7 +6,7 @@
   <img src="docs/screenshots/01-landing.jpg" width="720" alt="启动页">
 </p>
 
-沉浸式在线音乐播放器 —— 将 BhandsMusic Electron 桌面应用迁移为 Web 网页版。
+沉浸式在线音乐播放器 —— 将 [BhandsMusic Electron 桌面应用](https://github.com/Bhands6/BhandsMusicChange) 迁移为 Web 网页版。
 
 🌐 **在线体验**：[https://bhands.icu](https://bhands.icu)
 
