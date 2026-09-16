@@ -8,20 +8,22 @@
 
 🌐 **在线体验**：[https://bhands.icu](https://bhands.icu)
 
-前端 React 19 + Three.js 粒子视觉，后端 Fastify + NeteaseCloudMusicApi，支持多音源、逐字歌词、天气电台与十余种实时音乐可视化效果。
+前端 React 19 + Three.js 粒子视觉，后端 Fastify + NeteaseCloudMusicApi，支持多音源、逐字歌词、天气电台与 15 种实时音乐可视化效果。
 
 ---
 
 ## ✨ 界面预览
 
 
-**首页**（未登录 / 已登录）
+**首页**（未登录 / 登录后 / 发现页）
 
 <p align="center">
-  <img src="docs/screenshots/02-home-guest.png" width="49%" alt="未登录首页">
+  <img src="docs/screenshots/02-home-guest.jpg" width="49%" alt="未登录首页">
   <img src="docs/screenshots/03-home-logged-in.jpg" width="49%" alt="登录后首页">
 </p>
-
+<p align="center">
+  <img src="docs/screenshots/19-home-discover.jpg" width="720" alt="热门新碟 · 发现页">
+</p>
 
 
 ## 🌌 粒子视觉效果
@@ -33,7 +35,8 @@
 | ![](docs/screenshots/04-fx-silk.jpg)<br>**丝绸** |![](docs/screenshots/05-fx-meteor.jpg)<br>**滚筒** | ![](docs/screenshots/06-fx-universe.jpg)<br>**星球** | 
 | ![](docs/screenshots/07-fx-vacuum.png)<br>**虚空** |![](docs/screenshots/08-fx-photo.jpg)<br>**唱片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**星河** | 
 | ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | 
-| ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** |
+| ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** | 
+| ![](docs/screenshots/16-fx-rose.jpg)<br>**玫瑰**（数学玫瑰曲线粒子化） |![](docs/screenshots/17-fx-heart.jpg)<br>**心跳**（lub-dub 双峰包络 + 内心星尘） | ![](docs/screenshots/18-fx-rain.png)<br>**字符雨**（Matrix 码雨 · 五段字符带） | 
 
 ## 🎵 功能特性
 
@@ -41,7 +44,7 @@
 |:---|:---|
 | **核心** | 音乐播放 / 搜索 · 多音源（网易官方 + 自定义音源脚本）· 逐字 / 翻译歌词 · 播放队列 |
 | **增强** | 播放列表管理 · 播放历史 · 收藏 · 天气电台（按当地天气智能推荐） |
-| **视觉** | 粒子视觉（丝绸 / 滚筒 / 星球 / 虚空 / 唱片 / 星河 / 螺旋星云 / 水母花等十余种预设）· 节拍可视化 · 壁纸模式 |
+| **视觉** | 粒子视觉（丝绸 / 星球 / 星河 / 极光 / 螺旋星云 / 水母花 / 数学玫瑰 / 心跳 / Matrix 字符雨等 15 种预设）· 节拍可视化 · 壁纸模式 |
 | **3D** | Three.js 集成 · 3D 歌单架 · 3D 视觉效果 |
 | **高级** | 本地音乐支持 · PWA · 移动端适配 |
 | **扩展** | 网易云账号扫码登录 · LX 音源沙盒（worker_threads + vm 隔离运行自定义脚本）· VIP 会员等级标识 |
@@ -131,14 +134,17 @@ Bhands_Web/
 ├── apps/
 │   ├── web/                    # 前端应用
 │   │   ├── src/
-│   │   │   ├── components/     # React 组件
+│   │   │   ├── api/            # API 客户端
+│   │   │   ├── components/     # React 组件（含 ParticleStage 粒子舞台 + GLSL 着色器）
 │   │   │   ├── pages/          # 页面组件
 │   │   │   ├── stores/         # Zustand 状态管理
 │   │   │   ├── audio/          # 音频引擎
-│   │   │   ├── visual/         # 视觉系统（粒子预设）
+│   │   │   ├── visual/         # 视觉系统（粒子预设参数）
 │   │   │   ├── lyrics/         # 歌词系统
 │   │   │   ├── playlist/       # 播放列表
 │   │   │   ├── weather/        # 天气系统
+│   │   │   ├── hooks/          # 自定义 Hooks
+│   │   │   ├── utils/          # 工具函数
 │   │   │   └── three/          # Three.js 3D
 │   │   └── vite.config.ts
 │   │
@@ -147,10 +153,12 @@ Bhands_Web/
 │       │   ├── routes/         # API 路由
 │       │   ├── services/       # 业务服务
 │       │   ├── adapters/       # 适配器
+│       │   ├── config/         # 配置
 │       │   └── middleware/     # 中间件
 │       └── tsconfig.json
 │
 ├── deploy-local.bat            # Windows 一键本地部署
+├── docker-compose.yml          # 生产部署编排（web + caddy + go-music-api）
 ├── .env.example                # 环境变量示例
 └── docs/screenshots/           # 界面截图
 ```
@@ -170,6 +178,12 @@ Bhands_Web/
 ### 添加新状态
 1. 在 `apps/web/src/stores/` 创建 Zustand store
 2. 在组件中使用 `useStore` hook
+
+### 添加新粒子预设
+1. 在 `apps/web/src/components/particleShaders.ts` 添加常量与顶点着色器分支（GLSL ES 1.00：`pow` 负底数必须 clamp 包裹，sin³ 用连乘代替）
+2. 在 `apps/web/src/stores/useSettingsStore.ts` 的 `ParticleEffect` 联合类型注册，并核对各画质档粒子池规模
+3. 在 `apps/web/src/components/particleShaders.test.ts` 补断言（注意：vitest 须在 `apps/web` 目录下运行）
+4. 若含音频联动，只接亮度 / 缩放等观感量，不接位置量
 
 ### 第三方音乐平台说明
 
