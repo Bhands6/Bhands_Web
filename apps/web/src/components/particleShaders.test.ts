@@ -1191,9 +1191,11 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
     // 字符场必须盖满 16:9 全屏视口（FOV45 radius9.5 下视口 ≈14.0×7.9；7.4 高时上下露空带——截图实锤）
     expect(VERTEX_SHADER).toMatch(/#define RAIN_W\s+15\.0/);
     expect(VERTEX_SHADER).toMatch(/#define RAIN_H\s+8\.8/);
-    // v7 参考图密度：~100 列（列距 ≈13px），行距同步收紧到 ≈12px——64 列「间隔有点大」被否
+    // v7 参考图密度：~100 列（列距 ≈13px）；v8 用户定参 72 行（行距 ≈12px）+ 字符 20px
     expect(VERTEX_SHADER).toMatch(/#define RAIN_COLS\s+100\.0/);
-    expect(VERTEX_SHADER).toMatch(/#define RAIN_ROWS\s+64\.0/);
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_ROWS\s+72\.0/);
+    // 20px 定参（系数 3.5，px≈系数×5.7）——sz 校准反复横跳，锁进测试
+    expect(rainCode).toMatch(/sz = clamp\(depthSize \* 3\.5/);
   });
 
   it('字形五段字符带：自上而下 字母→数字→汉字→符号→希腊（带界=字符数累计占比），段内低频闪烁', () => {
