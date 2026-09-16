@@ -1352,8 +1352,11 @@ void main(){
     // 0.38 档：单列全程 2.0~4.8s（原版 35ms/行 ≈ 全程 1.7~2.3s；0.22 时 3.5~8s 太拖沓）
     float colSpeed = 0.55 + hash11(rcol * 17.1) * 0.75;
     float head01 = fract(hash11(rcol * 5.3) - uGalaxyAge * colSpeed * 0.38);
-    float crow01 = (rrow + 0.5 + (hash11(aRand * 7.7) - 0.5) * 0.5) / RAIN_ROWS;
-    float ccol01 = (rcol + 0.5 + (hash11(aRand * 3.3) - 0.5) * 0.5) / RAIN_COLS;
+    // ---- 格心精确对齐：零抖动（v5 前每字符带 ±1/4 格随机偏移，双射修掉双字后它成了
+    //      唯一让列歪斜的因素——用户截图「歪的不是一条直线」实锤）。原版 Canvas 就是
+    //      i×fontSize 的严格网格，笔直一条线才对味 ----
+    float crow01 = (rrow + 0.5) / RAIN_ROWS;
+    float ccol01 = (rcol + 0.5) / RAIN_COLS;
     // ---- 拖尾亮度：头部之下未到达不可见；头部白热 → 矩阵绿渐隐 ----
     // 双段曲线（v2 单 pow 1.15 太平：整条尾迹同亮度读不出「雨柱」，只剩绿噪点感——截图实锤）：
     // 近头 0.26 底座 + 0.74·pow(trail,2.4) 陡坡 → 头部 1.0 / 中段 0.48 / 远尾 0.26（≈4:1 对比）；
