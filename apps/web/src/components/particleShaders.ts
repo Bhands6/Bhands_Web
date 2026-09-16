@@ -167,7 +167,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define RAIN_ROWS      48.0   // 字符行数
 #define RAIN_W         13.2   // 字符场世界宽（radius 9.5 下铺满可视域）
 #define RAIN_H         7.4    // 字符场世界高
-#define RAIN_TRAIL     0.45   // 拖尾长度（占列高比例：头部之上 45% 可见，其余未到达不可见）
+#define RAIN_TRAIL     0.78   // 拖尾长度（占列高比例：头部之上 78% 可见渐隐——原版半透明黑罩拖尾几乎贯穿全列，0.45 时「每列只亮几格」被截图否决）
 #define RAIN_APPEAR    1.2    // 切入显现时长（秒，ease-out cubic）
 #define RAIN_KEEP      0.25   // 粒子保留率（网格密度 ≈ 字符格 4.5 倍，按 hash 采 1/4，近似每格一字符）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
@@ -1340,17 +1340,20 @@ void main(){
     float rrow = floor(aUv.y * RAIN_ROWS);
     float kept = step(hash11(aRand * 53.1), RAIN_KEEP);
     // ---- 每列下落头部：随机速度/相位，fract 循环（到底回顶，同原版 drops 重置）----
+    // 0.38 档：单列全程 2.0~4.8s（原版 35ms/行 ≈ 全程 1.7~2.3s；0.22 时 3.5~8s 太拖沓）
     float colSpeed = 0.55 + hash11(rcol * 17.1) * 0.75;
-    float head01 = fract(hash11(rcol * 5.3) - uGalaxyAge * colSpeed * 0.22);
+    float head01 = fract(hash11(rcol * 5.3) - uGalaxyAge * colSpeed * 0.38);
     float crow01 = (rrow + 0.5 + (hash11(aRand * 7.7) - 0.5) * 0.5) / RAIN_ROWS;
     float ccol01 = (rcol + 0.5 + (hash11(aRand * 3.3) - 0.5) * 0.5) / RAIN_COLS;
     // ---- 拖尾亮度：头部之下未到达不可见；头部白热 → 矩阵绿渐隐 ----
+    // pow 1.15（原 1.6 太陡：中段尾部 alpha 腰斩，截图观感「稀稀拉拉几点」）
     float dist01 = crow01 - head01;                       // >0 = 头部上方（已扫过）
     float trail = 1.0 - clamp(dist01 / RAIN_TRAIL, 0.0, 1.0);
-    float body = step(0.0, dist01) * pow(clamp(trail, 0.0, 1.0), 1.6);
-    float isHead = step(0.0, dist01) * (1.0 - step(0.012, dist01));
+    float body = step(0.0, dist01) * pow(clamp(trail, 0.0, 1.0), 1.15);
+    float isHead = step(0.0, dist01) * (1.0 - step(0.022, dist01));
     // ---- 字符闪烁：glyph 索引随时间跳变（每列独立速率）----
-    float flicker = floor(uGalaxyAge * (2.0 + hash11(rcol * 3.7) * 5.0));
+    // 0.6~2.0 次/秒（原 2~7Hz 太频，字符雨看着发躁；原版 2%/帧 ≈ 0.56 次/秒）
+    float flicker = floor(uGalaxyAge * (0.6 + hash11(rcol * 3.7) * 1.4));
     float glyph = floor(hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617) * 64.0);
     vPack1.w = clamp(glyph, 0.0, 63.0);
     // ---- 世界坐标：铺满可视域；未保留的粒子藏远景 ----
@@ -1365,10 +1368,11 @@ void main(){
     float md = distance(pos.xy, uMouseXY);
     float gold = (1.0 - smoothstep(0.6, 2.0, md)) * kept;
     vColor = mix(vColor, vec3(1.00, 0.85, 0.25), gold * 0.85);
-    // ---- alpha：拖尾亮度 × 显现 × 音频亮度；鼠标光晕内增亮 ----
+    // ---- alpha：拖尾亮度 × 显现 × 音频亮度；鼠标光晕内增亮；头部额外加亮（白热更醒目）----
+    // base 0.80（原 0.55 配陡衰减整体偏暗——截图「太暗」主因之一）
     float appearRaw = clamp(uGalaxyAge / RAIN_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
-    vAlpha = appear * body * (0.55 + uBass * 0.25 + uEnergy * 0.15) * (1.0 + gold * 0.8) * kept;
+    vAlpha = appear * body * (0.80 + uBass * 0.22 + uEnergy * 0.12) * (1.0 + gold * 0.8 + isHead * 0.5) * kept;
     maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uEnergy * 0.05);
   }
 

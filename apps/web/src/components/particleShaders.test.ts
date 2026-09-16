@@ -1177,17 +1177,22 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
 
   it('列式下落：每列随机速度/相位的 head01 fract 循环（到底回顶，同原版 drops 重置）', () => {
     expect(rainCode).toMatch(/colSpeed = 0\.55 \+ hash11\(rcol \* 17\.1\) \* 0\.75/);
-    expect(rainCode).toMatch(/head01 = fract\(hash11\(rcol \* 5\.3\) - uGalaxyAge \* colSpeed \* 0\.22\)/);
+    // 0.38 档：全程 2.0~4.8s（原版 ≈2s；0.22 时 3.5~8s 太拖沓被截图否决）
+    expect(rainCode).toMatch(/head01 = fract\(hash11\(rcol \* 5\.3\) - uGalaxyAge \* colSpeed \* 0\.38\)/);
   });
 
   it('拖尾亮度：头部之下不可见（step 门控）、头部白热、绿色渐隐 pow 收锋', () => {
     expect(rainCode).toMatch(/dist01 = crow01 - head01/);
-    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* pow\(clamp\(trail, 0\.0, 1\.0\), 1\.6\)/);
-    expect(rainCode).toMatch(/isHead = step\(0\.0, dist01\) \* \(1\.0 - step\(0\.012, dist01\)\)/);
+    // pow 1.15：衰减平缓（1.6 时中段尾部太暗，「每列只亮几格」被截图否决）
+    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* pow\(clamp\(trail, 0\.0, 1\.0\), 1\.15\)/);
+    expect(rainCode).toMatch(/isHead = step\(0\.0, dist01\) \* \(1\.0 - step\(0\.022, dist01\)\)/);
+    // 拖尾长度断言：必须显著过半列高（原版黑罩拖尾几乎贯穿全列；define 在常量区，全源断言）
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_TRAIL\s+0\.7\d/);
   });
 
   it('字形索引：hash(列,行,flicker) 经 vPack1.w 传入片元（64 格 clamp，字符随机闪烁）', () => {
-    expect(rainCode).toMatch(/flicker = floor\(uGalaxyAge \* \(2\.0 \+ hash11\(rcol \* 3\.7\) \* 5\.0\)\)/);
+    // 0.6~2.0 次/秒：低频突变（2~7Hz 时字符雨看着发躁）
+    expect(rainCode).toMatch(/flicker = floor\(uGalaxyAge \* \(0\.6 \+ hash11\(rcol \* 3\.7\) \* 1\.4\)\)/);
     expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 63\.0\)/);
   });
 
