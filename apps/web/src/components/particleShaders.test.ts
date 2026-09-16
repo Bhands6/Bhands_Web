@@ -1194,9 +1194,10 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
   });
 
   it('字形索引：hash(列,行,flicker) 经 vPack1.w 传入片元（64 格 clamp，字符随机闪烁）', () => {
-    // 0.6~2.0 次/秒：低频突变（2~7Hz 时字符雨看着发躁）
+    // 0.6~2.0 次/秒：低频突变（2~7Hz 时字符雨看着发躁）；图集 9×9=81 字符全量（64 时 17 个希腊字母被截断）
     expect(rainCode).toMatch(/flicker = floor\(uGalaxyAge \* \(0\.6 \+ hash11\(rcol \* 3\.7\) \* 1\.4\)\)/);
-    expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 63\.0\)/);
+    expect(rainCode).toMatch(/hash11\(rcol \* 91\.7 \+ rrow \* 7\.31 \+ flicker \* 0\.617\) \* 81\.0/);
+    expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 80\.0\)/);
   });
 
   it('鼠标附近金色高亮（对齐原版 shadowColor 金）+ 网格密度过剩按 hash 保留', () => {
@@ -1206,10 +1207,11 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
     expect(rainCode).toMatch(/vec3\(0\.0, 0\.0, -90\.0\)/);
   });
 
-  it('片元：字形图集采样路径（uPreset>13.5 门控 + 8×8 格定位 + flipY 校正 + discard 抠字）', () => {
+  it('片元：字形图集采样路径（uPreset>13.5 门控 + 9×9 格定位 + flipY 校正 + discard 抠字）', () => {
     expect(FRAGMENT_SHADER).toMatch(/uPreset > 13\.5/);
     expect(FRAGMENT_SHADER).toMatch(/uGlyphAtlas/);
-    expect(FRAGMENT_SHADER).toMatch(/1\.0 - \(gy \+ gl_PointCoord\.y\) \/ 8\.0/);
+    expect(FRAGMENT_SHADER).toMatch(/1\.0 - \(gy \+ gl_PointCoord\.y\) \/ 9\.0/);
+    expect(FRAGMENT_SHADER).toMatch(/mod\(g, 9\.0\)/);
     expect(FRAGMENT_SHADER).toMatch(/spriteAlpha = tex\.a/);
   });
 

@@ -122,7 +122,7 @@ function makeDotTexture(): THREE.Texture {
 }
 
 // ============================================================
-//  字符雨字形图集（预设 14）：8×8=64 格白字透明底，片元按 vPack1.w 索引采样
+//  字符雨字形图集（预设 14）：9×9=81 格白字透明底，片元按 vPack1.w 索引采样
 //  字符集：Latin + 数字 + 汉字 + 符号 + 希腊（对齐原版字母雨的多字符集气质）
 // ============================================================
 function makeGlyphAtlasTexture(): THREE.Texture {
@@ -132,17 +132,17 @@ function makeGlyphAtlasTexture(): THREE.Texture {
     '♡★☆♠♣♥♦♪♫' +
     'αβγδεζηθικλμνξοπρστυφχψω';
   const cv = document.createElement('canvas');
-  cv.width = cv.height = 256;   // 8×8 格、每格 32px
+  cv.width = cv.height = 288;   // 9×9 格、每格 32px（81 字符全量上集——256px 只够 8×8=64，17 个希腊字母被截断永不出现）
   const ctx = cv.getContext('2d')!;
-  ctx.clearRect(0, 0, 256, 256);
+  ctx.clearRect(0, 0, 288, 288);
   ctx.font = '26px "Courier New", monospace';
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (let i = 0; i < 64; i++) {
+  for (let i = 0; i < 81; i++) {
     const ch = GLYPHS[i];
     if (!ch) break;
-    ctx.fillText(ch, (i % 8) * 32 + 16, Math.floor(i / 8) * 32 + 17);
+    ctx.fillText(ch, (i % 9) * 32 + 16, Math.floor(i / 9) * 32 + 17);
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearFilter;

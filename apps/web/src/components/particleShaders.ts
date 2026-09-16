@@ -161,7 +161,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 
 // ---------------- 字符雨（预设 14）· RAIN_* ----------------
 // 移植 Matrix 风格字母雨页面：列式下落字符 + 拖尾渐隐 + 鼠标金色高亮。
-// 字形渲染走**字形图集管线**：8×8=64 字符预渲染成纹理（ParticleStage.makeGlyphAtlasTexture），
+// 字形渲染走**字形图集管线**：9×9=81 字符预渲染成纹理（ParticleStage.makeGlyphAtlasTexture），
 // 顶点把字形索引经 vPack1.w 传入片元，片元按索引采样（uPreset>13.5 门控，替代圆形软点）。
 #define RAIN_COLS      64.0   // 字符列数（列 × 行 = 字符格；网格密度约 4.5 倍过剩，按 hash 保留）
 #define RAIN_ROWS      48.0   // 字符行数
@@ -1331,7 +1331,7 @@ void main(){
   //  · 每列一个下落头部 head01（随机速度/相位，fract 循环 = 到底回顶）
   //  · 拖尾亮度：头部白热 → 矩阵绿渐隐 → 未到达的行完全不可见（约 6 成粒子隐藏）
   //  · 字符闪烁：glyph 索引 = hash(列, 行, floor(time·flicker))，经 vPack1.w
-  //    传入片元采样字形图集（uGlyphAtlas，8×8=64 字符：Latin/数字/汉字/希腊/符号）
+  //    传入片元采样字形图集（uGlyphAtlas，9×9=81 字符：Latin/数字/汉字/希腊/符号）
   //  · 鼠标附近金色高亮（对齐原版 shadowColor 金）；音频只进亮度（工作流 4.7③）
   // ====================================================
   else {
@@ -1356,8 +1356,8 @@ void main(){
     // ---- 字符闪烁：glyph 索引随时间跳变（每列独立速率）----
     // 0.6~2.0 次/秒（原 2~7Hz 太频，字符雨看着发躁；原版 2%/帧 ≈ 0.56 次/秒）
     float flicker = floor(uGalaxyAge * (0.6 + hash11(rcol * 3.7) * 1.4));
-    float glyph = floor(hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617) * 64.0);
-    vPack1.w = clamp(glyph, 0.0, 63.0);
+    float glyph = floor(hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617) * 81.0);
+    vPack1.w = clamp(glyph, 0.0, 80.0);
     // ---- 世界坐标：铺满可视域；未保留的粒子藏远景 ----
     pos = mix(
       vec3(0.0, 0.0, -90.0),
@@ -1617,13 +1617,13 @@ void main(){
   float spriteAlpha;
   if (uPreset > 13.5) {
     // 字符雨（RAIN）：字形图集采样 —— 每个粒子是屏幕上的一个「字符」。
-    // vPack1.w 携带字形索引（0..63），gl_PointCoord 在 32px 字形格内定位；
-    // 图集 8×8=64 格、白字透明底，颜色由 vColor 染（经典矩阵绿 / 头部白热 / 鼠标金）。
+    // vPack1.w 携带字形索引（0..80），gl_PointCoord 在 32px 字形格内定位；
+    // 图集 9×9=81 格、白字透明底，颜色由 vColor 染（经典矩阵绿 / 头部白热 / 鼠标金）。
     // ⚠️ gl_PointCoord.y 向下、CanvasTexture flipY=true：格内 v 取 1−y 字形才正立。
-    float g = clamp(vPack1.w, 0.0, 63.0);
-    float gx = mod(g, 8.0);
-    float gy = floor(g / 8.0);
-    vec2 auv = vec2((gx + gl_PointCoord.x) / 8.0, 1.0 - (gy + gl_PointCoord.y) / 8.0);
+    float g = clamp(vPack1.w, 0.0, 80.0);
+    float gx = mod(g, 9.0);
+    float gy = floor(g / 9.0);
+    vec2 auv = vec2((gx + gl_PointCoord.x) / 9.0, 1.0 - (gy + gl_PointCoord.y) / 9.0);
     vec4 tex = texture2D(uGlyphAtlas, auv);
     spriteAlpha = tex.a;
     if (spriteAlpha < 0.02) discard;
