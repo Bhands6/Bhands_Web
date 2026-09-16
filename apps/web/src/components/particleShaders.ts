@@ -158,6 +158,18 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define HEART_DRAG       0.75   // 线性减速系数（原版 effect=−0.75：v(τ)=v0(1−0.75τ)）
 #define HEART_APPEAR     1.6    // 切入显现时长（秒，ease-out cubic，从心中心向外径向扫开）
 #define HEART_STAR_SHARE 0.22   // 星空背景层粒子占比（原版另一块星空 canvas 的化身）
+
+// ---------------- 字符雨（预设 14）· RAIN_* ----------------
+// 移植 Matrix 风格字母雨页面：列式下落字符 + 拖尾渐隐 + 鼠标金色高亮。
+// 字形渲染走**字形图集管线**：8×8=64 字符预渲染成纹理（ParticleStage.makeGlyphAtlasTexture），
+// 顶点把字形索引经 vPack1.w 传入片元，片元按索引采样（uPreset>13.5 门控，替代圆形软点）。
+#define RAIN_COLS      64.0   // 字符列数（列 × 行 = 字符格；网格密度约 4.5 倍过剩，按 hash 保留）
+#define RAIN_ROWS      48.0   // 字符行数
+#define RAIN_W         13.2   // 字符场世界宽（radius 9.5 下铺满可视域）
+#define RAIN_H         7.4    // 字符场世界高
+#define RAIN_TRAIL     0.45   // 拖尾长度（占列高比例：头部之上 45% 可见，其余未到达不可见）
+#define RAIN_APPEAR    1.2    // 切入显现时长（秒，ease-out cubic）
+#define RAIN_KEEP      0.25   // 粒子保留率（网格密度 ≈ 字符格 4.5 倍，按 hash 采 1/4，近似每格一字符）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1247,10 +1259,10 @@ void main(){
   //    粒子池的持续发射，免 CPU 粒子池管理
   //  · 心跳包络移植 CSS keyframes（lub-dub 双峰）+ uBeat：音乐鼓点让心随歌跳
   //  · 背景星流取 22% 粒子（青/紫/白科技调），z 向相机推进 + 闪烁，与爱心前后景深分离
-  //  · 主层 Additive（ParticleStage 门控）：黑底 + 粉红叠加出霓虹发光质感
-  //  · 音频只进亮度与心跳（工作流 4.7③），不接位置量
+//  · 主层 Additive（ParticleStage 门控）：黑底 + 粉红叠加出霓虹发光质感
+//  · 音频只进亮度与心跳（工作流 4.7③），不接位置量
   // ====================================================
-  else {
+  else if (uPreset < 13.5) {
     // ---- 显现进度：切入预设起算（uGalaxyAge 对 heart 也在切入时归零）----
     float appearRaw = clamp(uGalaxyAge / HEART_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
@@ -1309,6 +1321,58 @@ void main(){
   }
 
   // ====================================================
+  //  Preset 14: RAIN — 字符雨（移植 Matrix 风格字母雨页面）
+  //
+  //  原版：Canvas 2D 逐列画字符（半透明黑罩出拖尾），字符随机闪烁；鼠标附近
+  //  金色高亮 + 光晕；点击产生字母波纹环（波纹依赖点击事件，舞台无此输入，v1 不搬）。
+  //  粒子化映射：
+  //  · 粒子网格离散成 RAIN_COLS × RAIN_ROWS 的字符格；网格密度约为字符格 4.5 倍，
+  //    按 hash 保留 RAIN_KEEP 比例（其余藏远景），近似每格一个字符
+  //  · 每列一个下落头部 head01（随机速度/相位，fract 循环 = 到底回顶）
+  //  · 拖尾亮度：头部白热 → 矩阵绿渐隐 → 未到达的行完全不可见（约 6 成粒子隐藏）
+  //  · 字符闪烁：glyph 索引 = hash(列, 行, floor(time·flicker))，经 vPack1.w
+  //    传入片元采样字形图集（uGlyphAtlas，8×8=64 字符：Latin/数字/汉字/希腊/符号）
+  //  · 鼠标附近金色高亮（对齐原版 shadowColor 金）；音频只进亮度（工作流 4.7③）
+  // ====================================================
+  else {
+    // ---- 字符格离散 + 保留采样（网格密度过剩，按 hash 保留 RAIN_KEEP）----
+    float rcol = floor(aUv.x * RAIN_COLS);
+    float rrow = floor(aUv.y * RAIN_ROWS);
+    float kept = step(hash11(aRand * 53.1), RAIN_KEEP);
+    // ---- 每列下落头部：随机速度/相位，fract 循环（到底回顶，同原版 drops 重置）----
+    float colSpeed = 0.55 + hash11(rcol * 17.1) * 0.75;
+    float head01 = fract(hash11(rcol * 5.3) - uGalaxyAge * colSpeed * 0.22);
+    float crow01 = (rrow + 0.5 + (hash11(aRand * 7.7) - 0.5) * 0.5) / RAIN_ROWS;
+    float ccol01 = (rcol + 0.5 + (hash11(aRand * 3.3) - 0.5) * 0.5) / RAIN_COLS;
+    // ---- 拖尾亮度：头部之下未到达不可见；头部白热 → 矩阵绿渐隐 ----
+    float dist01 = crow01 - head01;                       // >0 = 头部上方（已扫过）
+    float trail = 1.0 - clamp(dist01 / RAIN_TRAIL, 0.0, 1.0);
+    float body = step(0.0, dist01) * pow(clamp(trail, 0.0, 1.0), 1.6);
+    float isHead = step(0.0, dist01) * (1.0 - step(0.012, dist01));
+    // ---- 字符闪烁：glyph 索引随时间跳变（每列独立速率）----
+    float flicker = floor(uGalaxyAge * (2.0 + hash11(rcol * 3.7) * 5.0));
+    float glyph = floor(hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617) * 64.0);
+    vPack1.w = clamp(glyph, 0.0, 63.0);
+    // ---- 世界坐标：铺满可视域；未保留的粒子藏远景 ----
+    pos = mix(
+      vec3(0.0, 0.0, -90.0),
+      vec3((ccol01 - 0.5) * RAIN_W, (crow01 - 0.5) * RAIN_H, 0.0),
+      kept
+    );
+    // ---- 颜色：经典矩阵绿（尾暗头亮），头部白热；鼠标附近金色（对齐原版）----
+    vec3 green = mix(vec3(0.04, 0.72, 0.16), vec3(0.55, 1.00, 0.60), trail);
+    vColor = mix(green, vec3(0.92, 1.00, 0.90), isHead);
+    float md = distance(pos.xy, uMouseXY);
+    float gold = (1.0 - smoothstep(0.6, 2.0, md)) * kept;
+    vColor = mix(vColor, vec3(1.00, 0.85, 0.25), gold * 0.85);
+    // ---- alpha：拖尾亮度 × 显现 × 音频亮度；鼠标光晕内增亮 ----
+    float appearRaw = clamp(uGalaxyAge / RAIN_APPEAR, 0.0, 1.0);
+    float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
+    vAlpha = appear * body * (0.55 + uBass * 0.25 + uEnergy * 0.15) * (1.0 + gold * 0.8) * kept;
+    maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uEnergy * 0.05);
+  }
+
+  // ====================================================
   //  鼠标交互 (仅 SILK)
   // ====================================================
   if (uMouseActive > 0.5 && uPreset < 0.5) {
@@ -1363,9 +1427,12 @@ void main(){
       // 玫瑰（ROSE）：红粉光感靠低 alpha + Additive 叠层，亮度增益保持克制。
       // 2026-09-15 base 0.96→1.18：点尺寸调小后叠加次数减少，补偿整体亮度避免花变暗。
       vBright = 1.18 + maxRippleAmp * 0.50 + uBass * 0.06 + uEnergy * 0.04;
-    } else if (uPreset > 12.5) {
+    } else if (uPreset > 12.5 && uPreset < 13.5) {
       // 心跳（HEART）：心随歌跳——uBeat 直进亮度（这是本预设的灵魂，别处都收敛它）。
       vBright = 1.12 + maxRippleAmp * 0.50 + uBass * 0.06 + uBeat * 0.10;
+    } else if (uPreset > 13.5) {
+      // 字符雨（RAIN）：绿色由 vColor 的拖尾梯度承担，亮度增益收敛防过曝成绿雾。
+      vBright = 1.15 + maxRippleAmp * 0.40 + uBass * 0.06 + uEnergy * 0.05;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -1404,10 +1471,14 @@ void main(){
     // 上限收紧——点大了花瓣的「丝绒」细节会糊成一团颗粒。
     // 2026-09-15 用户调优：点更小（0.62→0.44）观感更细密；下限/上限同步收紧。
     sz = clamp(depthSize * 0.44 * (1.0 + uBass * 0.10 + uMid * 0.06), 0.40, 1.85);
-  } else if (uPreset > 12.5) {
+  } else if (uPreset > 12.5 && uPreset < 13.5) {
     // 心跳（HEART）：尺寸档位经 vPack1.w 传入——爱心粒子随生命周期膨胀（easeOutCube
     // 0.35→1.15，原版粒子「边飘边胀」的质感），星空星近大远小（0.55→0.90）。
     sz = clamp(depthSize * vPack1.w * (1.0 + uBass * 0.10 + uBeat * 0.06), 0.30, 3.20);
+  } else if (uPreset > 13.5) {
+    // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（列距 0.206 / 行距 0.154 世界单位，
+    // radius 9.5 下约 21px）——片元按字形图集裁形，尺寸大了字形会互相重叠糊掉。
+    sz = clamp(depthSize * 0.52 * (1.0 + uBass * 0.08), 0.60, 2.30);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。
@@ -1439,7 +1510,7 @@ void main(){
 // ============================================================
 export const FRAGMENT_SHADER = /* glsl */ `
 precision highp float;
-uniform sampler2D uDotTex;
+uniform sampler2D uDotTex, uGlyphAtlas;
 uniform float uAlpha, uPreset, uMeteorSize;
 varying vec3 vColor;
 varying vec4 vPack0;   // .x=vBright .y=vRipple .z=vEdgeBoost .w=vAlpha
@@ -1535,7 +1606,20 @@ void main(){
 
   vec3 col = vColor * vBright;
   float spriteAlpha;
-  if (uPreset > 10.5) {
+  if (uPreset > 13.5) {
+    // 字符雨（RAIN）：字形图集采样 —— 每个粒子是屏幕上的一个「字符」。
+    // vPack1.w 携带字形索引（0..63），gl_PointCoord 在 32px 字形格内定位；
+    // 图集 8×8=64 格、白字透明底，颜色由 vColor 染（经典矩阵绿 / 头部白热 / 鼠标金）。
+    // ⚠️ gl_PointCoord.y 向下、CanvasTexture flipY=true：格内 v 取 1−y 字形才正立。
+    float g = clamp(vPack1.w, 0.0, 63.0);
+    float gx = mod(g, 8.0);
+    float gy = floor(g / 8.0);
+    vec2 auv = vec2((gx + gl_PointCoord.x) / 8.0, 1.0 - (gy + gl_PointCoord.y) / 8.0);
+    vec4 tex = texture2D(uGlyphAtlas, auv);
+    spriteAlpha = tex.a;
+    if (spriteAlpha < 0.02) discard;
+    col = mix(col, col * 1.3 + vec3(0.04), vRipple * 0.35);
+  } else if (uPreset > 10.5) {
     // 水母花（v4）：「薄纱」柔边光斑 —— 径向 pow2.6 衰减比圆点纹理更软、比星云 pow8 更宽。
     // 大量低 alpha 粒子要叠出「发光薄雾」，柔边是前提（硬边/描边会在重叠处露馅看到单个粒子）。
     float d = distance(gl_PointCoord, vec2(0.5));
@@ -1647,6 +1731,9 @@ void main(){
   // 流星：泛光层会把点放大 2.65×，叠加圆点纹理就成了一坨大光斑。
   // 压掉 92% 只留一点柔和光晕，拖尾本体交给主层画（主层才是长条形）。
   bloomKeep *= 1.0 - vMeteor * 0.92;
+  // 字符雨（RAIN）：泛光 blob 不含字形形状，会把文字糊成绿色光斑——整层关闭，
+  // 霓虹感由主层 Additive 自身叠加承担。
+  bloomKeep *= 1.0 - step(13.5, uPreset);
   gl_FragColor = vec4(col, soft * uAlpha * uBloomStrength * pulse * 0.55 * vAlpha * bloomKeep);
 }
 `;

@@ -1055,17 +1055,20 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
     VERTEX_SHADER.indexOf('Preset 13: HEART')
   );
 
-  it('分支注册：11/12 改区间判定、13 用兜底 else，顺序 JELLY→ROSE→HEART', () => {
+  it('分支注册：11/12/13 改区间判定、14 用兜底 else，顺序 JELLY→ROSE→HEART→RAIN', () => {
     expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 11\.5\)/);
     expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 12\.5\)/);
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 13\.5\)/);
     const i11 = VERTEX_SHADER.indexOf('Preset 11: JELLY');
     const i12 = VERTEX_SHADER.indexOf('Preset 12: ROSE');
     const i13 = VERTEX_SHADER.indexOf('Preset 13: HEART');
+    const i14 = VERTEX_SHADER.indexOf('Preset 14: RAIN');
     expect(i12, '预设 12 的分支必须存在').toBeGreaterThan(i11);
     expect(i13, '预设 13 的分支必须存在').toBeGreaterThan(i12);
-    // 兜底必须是 HEART 的 else（不能是带条件的 else if），否则异常 uPreset 会落空分支
-    const heartCode = VERTEX_SHADER.slice(i13);
-    expect(heartCode).toMatch(/else \{/);
+    expect(i14, '预设 14 的分支必须存在').toBeGreaterThan(i13);
+    // 兜底必须是 RAIN 的 else（不能是带条件的 else if），否则异常 uPreset 会落空分支
+    const rainCode = VERTEX_SHADER.slice(i14);
+    expect(rainCode).toMatch(/else \{/);
   });
 
   it('颜色公式逐式移植：mod(255 - sign(x)*floor(abs(x)), 256)/255（trunc 的 GLSL ES 1.00 兼容等价式）', () => {
@@ -1127,7 +1130,10 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
 });
 
 describe('心跳（预设 13：爱心曲线 + 心跳包络 + 星空背景）', () => {
-  const heartCode = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 13: HEART'));
+  const heartCode = VERTEX_SHADER.slice(
+    VERTEX_SHADER.indexOf('Preset 13: HEART'),
+    VERTEX_SHADER.indexOf('Preset 14: RAIN')
+  );
 
   it('爱心曲线逐式移植：x=160·sin³（连乘非 pow，负底数 pow 未定义）、y 四项余弦原式', () => {
     expect(heartCode).toMatch(/160\.0 \* st \* st \* st/);
@@ -1163,5 +1169,43 @@ describe('心跳（预设 13：爱心曲线 + 心跳包络 + 星空背景）', (
     const code = heartCode.replace(/\/\/.*$/gm, '');
     const bad = code.match(/pow\((?!(?:clamp|abs|max)\(|1\.0 - appearRaw)[^,)]+/g);
     expect(bad, `发现未包裹底数的 pow：${bad === null ? '' : bad.join(' | ')}`).toBeNull();
+  });
+});
+
+describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => {
+  const rainCode = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 14: RAIN'));
+
+  it('列式下落：每列随机速度/相位的 head01 fract 循环（到底回顶，同原版 drops 重置）', () => {
+    expect(rainCode).toMatch(/colSpeed = 0\.55 \+ hash11\(rcol \* 17\.1\) \* 0\.75/);
+    expect(rainCode).toMatch(/head01 = fract\(hash11\(rcol \* 5\.3\) - uGalaxyAge \* colSpeed \* 0\.22\)/);
+  });
+
+  it('拖尾亮度：头部之下不可见（step 门控）、头部白热、绿色渐隐 pow 收锋', () => {
+    expect(rainCode).toMatch(/dist01 = crow01 - head01/);
+    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* pow\(clamp\(trail, 0\.0, 1\.0\), 1\.6\)/);
+    expect(rainCode).toMatch(/isHead = step\(0\.0, dist01\) \* \(1\.0 - step\(0\.012, dist01\)\)/);
+  });
+
+  it('字形索引：hash(列,行,flicker) 经 vPack1.w 传入片元（64 格 clamp，字符随机闪烁）', () => {
+    expect(rainCode).toMatch(/flicker = floor\(uGalaxyAge \* \(2\.0 \+ hash11\(rcol \* 3\.7\) \* 5\.0\)\)/);
+    expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 63\.0\)/);
+  });
+
+  it('鼠标附近金色高亮（对齐原版 shadowColor 金）+ 网格密度过剩按 hash 保留', () => {
+    expect(rainCode).toMatch(/distance\(pos\.xy, uMouseXY\)/);
+    expect(rainCode).toMatch(/vec3\(1\.00, 0\.85, 0\.25\)/);
+    expect(rainCode).toMatch(/step\(hash11\(aRand \* 53\.1\), RAIN_KEEP\)/);
+    expect(rainCode).toMatch(/vec3\(0\.0, 0\.0, -90\.0\)/);
+  });
+
+  it('片元：字形图集采样路径（uPreset>13.5 门控 + 8×8 格定位 + flipY 校正 + discard 抠字）', () => {
+    expect(FRAGMENT_SHADER).toMatch(/uPreset > 13\.5/);
+    expect(FRAGMENT_SHADER).toMatch(/uGlyphAtlas/);
+    expect(FRAGMENT_SHADER).toMatch(/1\.0 - \(gy \+ gl_PointCoord\.y\) \/ 8\.0/);
+    expect(FRAGMENT_SHADER).toMatch(/spriteAlpha = tex\.a/);
+  });
+
+  it('泛光层对字符雨关门（blob 不含字形形状，会糊成绿斑）', () => {
+    expect(BLOOM_FRAGMENT_SHADER).toMatch(/bloomKeep \*= 1\.0 - step\(13\.5, uPreset\)/);
   });
 });

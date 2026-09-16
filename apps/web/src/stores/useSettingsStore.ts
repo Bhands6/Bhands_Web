@@ -7,11 +7,11 @@ import { create } from 'zustand';
 
 export type RenderQuality = 'eco' | 'balanced' | 'high' | 'ultra';
 
-/** 粒子效果形态（复刻桌面版 shader 预设：丝绸/滚筒/星球/虚空/唱片/星河壁纸 + 新增 极光/万花筒/迸发/声波地形/螺旋星云/水母花/玫瑰/心跳） */
+/** 粒子效果形态（复刻桌面版 shader 预设：丝绸/滚筒/星球/虚空/唱片/星河壁纸 + 新增 极光/万花筒/迸发/声波地形/螺旋星云/水母花/玫瑰/心跳/字符雨） */
 export type ParticleEffect =
   | 'silk' | 'tunnel' | 'orbit' | 'void' | 'vinyl' | 'wallpaper'
   | 'aurora' | 'kaleido' | 'burst' | 'sonic' | 'spiral' | 'jelly'
-  | 'rose' | 'heart';
+  | 'rose' | 'heart' | 'rain';
 
 export const EFFECT_LABELS: Record<ParticleEffect, string> = {
   silk: '丝绸',
@@ -27,10 +27,11 @@ export const EFFECT_LABELS: Record<ParticleEffect, string> = {
   spiral: '螺旋星云',
   jelly: '水母花',
   rose: '玫瑰',
-  heart: '心跳'
+  heart: '心跳',
+  rain: '字符雨'
 };
 
-/** 桌面版 uPreset 序号（shader 分支索引）；6/7/8 为新增，9/10 为声波地形/螺旋星云，11 为水母花，12 为玫瑰，13 为心跳 */
+/** 桌面版 uPreset 序号（shader 分支索引）；6/7/8 为新增，9/10 为声波地形/螺旋星云，11 为水母花，12 为玫瑰，13 为心跳，14 为字符雨 */
 export const EFFECT_PRESET_INDEX: Record<ParticleEffect, number> = {
   silk: 0,
   tunnel: 1,
@@ -45,7 +46,8 @@ export const EFFECT_PRESET_INDEX: Record<ParticleEffect, number> = {
   spiral: 10,
   jelly: 11,
   rose: 12,
-  heart: 13
+  heart: 13,
+  rain: 14
 };
 
 /** 旧版效果名 → 桌面版预设迁移 */

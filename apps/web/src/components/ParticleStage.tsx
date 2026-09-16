@@ -93,7 +93,10 @@ const PRESET_CAMERA: Record<ParticleEffect, { radius: number; phi: number }> = {
   heart: { radius: 9.0, phi: 0.03 },
   // 玫瑰：正面近对称构图（phi 小），投影后世界高 5.2（ROSE_WORLD_H 定）→ radius 8.2 时
   // 纵向可见 ±3.4，花体 ±2.6 刚好入框留边
-  rose: { radius: 8.2, phi: 0.05 }
+  rose: { radius: 8.2, phi: 0.05 },
+  // 字符雨：正面满屏（phi 近 0），字符场 RAIN_W×RAIN_H = 13.2×7.4 → radius 9.5 时
+  // 纵向可见 ±3.9、横向 ±7.0，场沿刚好铺满可视域
+  rain: { radius: 9.5, phi: 0.02 }
 };
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -112,6 +115,35 @@ function makeDotTexture(): THREE.Texture {
   g.addColorStop(1.0, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  return tex;
+}
+
+// ============================================================
+//  字符雨字形图集（预设 14）：8×8=64 格白字透明底，片元按 vPack1.w 索引采样
+//  字符集：Latin + 数字 + 汉字 + 符号 + 希腊（对齐原版字母雨的多字符集气质）
+// ============================================================
+function makeGlyphAtlasTexture(): THREE.Texture {
+  const GLYPHS =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' +
+    '春夏秋冬风雨雷电日月星辰' +
+    '♡★☆♠♣♥♦♪♫' +
+    'αβγδεζηθικλμνξοπρστυφχψω';
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 256;   // 8×8 格、每格 32px
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 256, 256);
+  ctx.font = '26px "Courier New", monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < 64; i++) {
+    const ch = GLYPHS[i];
+    if (!ch) break;
+    ctx.fillText(ch, (i % 8) * 32 + 16, Math.floor(i / 8) * 32 + 17);
+  }
   const tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -174,6 +206,7 @@ export default function ParticleStage() {
     container.appendChild(renderer.domElement);
 
     const dotTexture = makeDotTexture();
+    const glyphAtlas = makeGlyphAtlasTexture();
 
     // ---------- 封面纹理（current/prev crossfade）+ 边缘纹理 ----------
     const coverCanvas = document.createElement('canvas');
@@ -287,6 +320,7 @@ export default function ParticleStage() {
       uRippleTex: { value: rippleTex },
       uRippleCount: { value: 0 },
       uDotTex: { value: dotTexture },
+      uGlyphAtlas: { value: glyphAtlas },
       uAlpha: { value: 0 },
       uBloomStrength: { value: 0.88 },
       uBloomSize: { value: 2.65 }
@@ -621,11 +655,12 @@ export default function ParticleStage() {
         uniforms.uPreset.value = idx;
         uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value as number, 0.15);
         Object.assign(orbitTarget, PRESET_CAMERA[s.visual.effect]);
-        // 水母花（11）/ 玫瑰（12）/ 心跳（13）：主层切 AdditiveBlending —— 「黑底 + 低 alpha + 加色叠加」是
-        // 发光薄纱/花瓣/霓虹爱心的公式：黑背景下单粒子观感与 Normal 相同，但重叠区会持续累加爆光，
-        // 叠出「发光薄雾/丝绒花瓣/粉红光晕」质感（depthWrite 已是 false，无遮挡问题）；其余预设恢复 Normal。
+        // 水母花（11）/ 玫瑰（12）/ 心跳（13）/ 字符雨（14）：主层切 AdditiveBlending —— 「黑底 + 低 alpha + 加色叠加」是
+        // 发光薄纱/花瓣/霓虹爱心/矩阵荧光字的公式：黑背景下单粒子观感与 Normal 相同，但重叠区会持续累加爆光，
+        // 叠出「发光薄雾/丝绒花瓣/粉红光晕/荧光字符」质感（depthWrite 已是 false，无遮挡问题）；其余预设恢复 Normal。
         const wantBlending =
-          idx === EFFECT_PRESET_INDEX.jelly || idx === EFFECT_PRESET_INDEX.rose || idx === EFFECT_PRESET_INDEX.heart
+          idx === EFFECT_PRESET_INDEX.jelly || idx === EFFECT_PRESET_INDEX.rose ||
+          idx === EFFECT_PRESET_INDEX.heart || idx === EFFECT_PRESET_INDEX.rain
             ? THREE.AdditiveBlending
             : THREE.NormalBlending;
         if (material.blending !== wantBlending) {
@@ -634,8 +669,8 @@ export default function ParticleStage() {
         }
         // 切到迸发效果时立刻爆一次，否则要等下一首歌才看得到
         if (s.visual.effect === 'burst') burstRequested = true;
-        // 切到螺旋星云时差速自转相位归零；切到玫瑰/心跳时绽放显现 + 生命周期从干净的初始态开始
-        if (s.visual.effect === 'spiral' || s.visual.effect === 'rose' || s.visual.effect === 'heart') galaxyResetRequested = true;
+        // 切到螺旋星云时差速自转相位归零；切到玫瑰/心跳/字符雨时显现 + 生命周期从干净的初始态开始
+        if (s.visual.effect === 'spiral' || s.visual.effect === 'rose' || s.visual.effect === 'heart' || s.visual.effect === 'rain') galaxyResetRequested = true;
         // 玫瑰密度加成：切入时几何重建到 ROSE_GRID_BOOST 倍网格（花瓣粒子更多），切出还原基础网格
         if (idx === EFFECT_PRESET_INDEX.rose && activeGrid === baseGrid) {
           rebuildGeometry(Math.round(baseGrid * ROSE_GRID_BOOST) | 1);
