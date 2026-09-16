@@ -15,12 +15,12 @@
 ## ✨ 界面预览
 
 
-**首页**（未登录 / 登录后 / 免登录页）
+**首页**（未登录 / 免登录页 / 登录后）
 
 <p align="center">
-  <img src="docs/screenshots/02-home-guest.jpg" width="49%" alt="未登录首页">
-  <img src="docs/screenshots/03-home-logged-in.jpg" width="49%" alt="登录后首页">
-  <img src="docs/screenshots/19-home-discover.jpg" width="720" alt="免登录页">
+  <img src="docs/screenshots/02-home-guest.jpg" width="32%" alt="未登录首页">
+  <img src="docs/screenshots/19-home-discover.jpg" width="32%" alt="免登录页">
+  <img src="docs/screenshots/03-home-logged-in.jpg" width="32%" alt="登录后首页">
 </p>
 
 
