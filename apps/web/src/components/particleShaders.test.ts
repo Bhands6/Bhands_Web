@@ -1183,6 +1183,17 @@ describe('心跳（预设 13：爱心曲线 + 心跳包络 + 星空背景）', (
     expect(heartCode).toMatch(/0\.14 \+ 0\.10 \* thump/);
   });
 
+  it('v3 密度重投：尖点窄带（|hx|<30 约 19% 粒子）按 |hx| 概率重投普通段，主体+星尘双分支', () => {
+    // 均匀 t 采样在参数尖点密度→∞，v2 减亮压不住 Additive 叠加（凹口竖柱/底尖亮块截图实锤）
+    expect(heartCode).toMatch(/float keep = smoothstep\(2\.0, 34\.0, abs\(hx\)\)/);
+    expect(heartCode).toMatch(/hash11\(aRand \* 91\.7\) > keep/);
+    expect(heartCode).toMatch(/ht = ht \+ 1\.05/);
+    // 星尘分支同款重投（向心收缩后尖点堆叠沿中轴出淡柱状雾）
+    expect(heartCode).toMatch(/float dkeep = smoothstep\(2\.0, 34\.0, abs\(dx\)\)/);
+    expect(heartCode).toMatch(/hash11\(aRand \* 97\.1\) > dkeep/);
+    expect(heartCode).toMatch(/dt1 = dt1 \+ 1\.05/);
+  });
+
   it('pow 底数安全：心跳分支内所有 pow 底数均 clamp 包裹或为已 clamp 的 appearRaw', () => {
     const code = heartCode.replace(/\/\/.*$/gm, '');
     const bad = code.match(/pow\((?!(?:clamp|abs|max)\(|1\.0 - appearRaw)[^,)]+/g);
