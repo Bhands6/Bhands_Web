@@ -163,8 +163,8 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 移植 Matrix 风格字母雨页面：列式下落字符 + 拖尾渐隐 + 鼠标金色高亮。
 // 字形渲染走**字形图集管线**：9×9=81 字符预渲染成纹理（ParticleStage.makeGlyphAtlasTexture），
 // 顶点把字形索引经 vPack1.w 传入片元，片元按索引采样（uPreset>13.5 门控，替代圆形软点）。
-#define RAIN_COLS      64.0   // 字符列数（列 × 行 = 字符格；网格密度约 4.5 倍过剩，按 hash 保留）
-#define RAIN_ROWS      48.0   // 字符行数
+#define RAIN_COLS      100.0  // 字符列数（v7 参考图对齐：列距 0.15 世界单位 ≈13px，原 64 列 21px「间隔有点大」被否）
+#define RAIN_ROWS      64.0   // 字符行数（列×行=6400 格，仍 < eco 档 88²=7744，双射槽 0 恒存在）
 #define RAIN_W         15.0   // 字符场世界宽（FOV45 radius9.5 下 16:9 全屏视口宽 ≈14.0，留边防露底）
 #define RAIN_H         8.8    // 字符场世界高（视口高 ≈7.9；7.4 时上下各露 ~35px 空带被截图实锤）
 #define RAIN_TRAIL     0.78   // 拖尾长度（占列高比例：头部之上 78% 可见渐隐——原版半透明黑罩拖尾几乎贯穿全列，0.45 时「每列只亮几格」被截图否决）
@@ -1359,11 +1359,10 @@ void main(){
     float ccol01 = (rcol + 0.5) / RAIN_COLS;
     // ---- 拖尾亮度：头部之下未到达不可见；头部白热 → 矩阵绿渐隐 ----
     // 双段曲线（v2 单 pow 1.15 太平：整条尾迹同亮度读不出「雨柱」，只剩绿噪点感——截图实锤）：
-    // 近头 0.26 底座 + 0.74·pow(trail,2.4) 陡坡 → 头部 1.0 / 中段 0.48 / 远尾 0.26（≈4:1 对比）；
-    // 尾端 smoothstep(0.05) 软着陆，列回绕时无弹入硬边
+    // v7 参考图提亮：底座 0.26→0.34、中段 0.48→0.48、远尾更亮；尾端 smoothstep 软着陆防弹入硬边
     float dist01 = crow01 - head01;                       // >0 = 头部上方（已扫过）
     float trail = 1.0 - clamp(dist01 / RAIN_TRAIL, 0.0, 1.0);
-    float body = step(0.0, dist01) * (0.26 + 0.74 * pow(clamp(trail, 0.0, 1.0), 2.4)) * smoothstep(0.0, 0.05, trail);
+    float body = step(0.0, dist01) * (0.34 + 0.66 * pow(clamp(trail, 0.0, 1.0), 2.2)) * smoothstep(0.0, 0.05, trail);
     float isHead = step(0.0, dist01) * (1.0 - step(0.022, dist01));
     // ---- 字符带 + 闪烁：字形按行位分五段，自上而下 = 字母→数字→汉字→符号→希腊（用户指定）----
     // 带界 = 各段字符数累计占比（26/36/48/57 ÷ 81）；段内索引仍随 flicker 低频跳变，
@@ -1393,7 +1392,7 @@ void main(){
       kept
     );
     // ---- 颜色：经典矩阵绿（尾暗头亮），头部白热；鼠标附近金色（对齐原版）----
-    vec3 green = mix(vec3(0.04, 0.72, 0.16), vec3(0.55, 1.00, 0.60), trail);
+    vec3 green = mix(vec3(0.07, 0.80, 0.20), vec3(0.55, 1.00, 0.60), trail);
     vColor = mix(green, vec3(0.92, 1.00, 0.90), isHead);
     float md = distance(pos.xy, uMouseXY);
     float gold = (1.0 - smoothstep(0.6, 2.0, md)) * kept;
@@ -1402,7 +1401,7 @@ void main(){
     // base 0.80（原 0.55 配陡衰减整体偏暗——截图「太暗」主因之一）
     float appearRaw = clamp(uGalaxyAge / RAIN_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
-    vAlpha = appear * body * (0.80 + uBass * 0.22 + uEnergy * 0.12) * (1.0 + gold * 0.8 + isHead * 0.5) * kept;
+    vAlpha = appear * body * (1.00 + uBass * 0.25 + uEnergy * 0.15) * (1.0 + gold * 0.8 + isHead * 0.7) * kept;
     maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uEnergy * 0.05);
   }
 
@@ -1466,7 +1465,7 @@ void main(){
       vBright = 1.12 + maxRippleAmp * 0.50 + uBass * 0.06 + uBeat * 0.10;
     } else if (uPreset > 13.5) {
       // 字符雨（RAIN）：绿色由 vColor 的拖尾梯度承担，亮度增益收敛防过曝成绿雾。
-      vBright = 1.15 + maxRippleAmp * 0.40 + uBass * 0.06 + uEnergy * 0.05;
+      vBright = 1.35 + maxRippleAmp * 0.40 + uBass * 0.06 + uEnergy * 0.05;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -1510,11 +1509,12 @@ void main(){
     // 0.35→1.15，原版粒子「边飘边胀」的质感），星空星近大远小（0.55→0.90）。
     sz = clamp(depthSize * vPack1.w * (1.0 + uBass * 0.10 + uBeat * 0.06), 0.30, 3.20);
   } else if (uPreset > 13.5) {
-    // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（列距 0.234 / 行距 0.183 世界单位，v3 场扩到 15×8.8）。
+    // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（v7 列距 0.15 / 行距 0.1375 世界单位 ≈13px）。
     // ⚠️ sz→像素换算 = sz·uPixel·uPointScale(=particleSize·1.3)：系数 0.52 时字形只有
-    // ~4px（用户截图「看不见」实锤）；2.3→13px、2.6→15px 后 v4 用户要求再放大到 3.0≈17px。
+    // ~4px（用户截图「看不见」实锤）；2.3→13px→3.0→17px 后 v7 对齐参考图缩到 2.1≈12px
+    // （参考图字符≈列距×0.9，17px 字配 13px 列距会横向糊死）。
     // 片元按字形图集裁形，尺寸过大字形会互相重叠糊掉。
-    sz = clamp(depthSize * 3.0 * (1.0 + uBass * 0.08), 5.80, 18.50);
+    sz = clamp(depthSize * 2.1 * (1.0 + uBass * 0.08), 4.50, 12.00);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。

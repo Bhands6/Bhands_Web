@@ -1183,14 +1183,17 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
 
   it('拖尾亮度：头部之下不可见（step 门控）、头部白热、绿色渐隐 pow 收锋', () => {
     expect(rainCode).toMatch(/dist01 = crow01 - head01/);
-    // 双段曲线：0.26 底座 + 0.74·pow(trail,2.4) 陡坡（单 pow 1.15 平塌无对比，读不出雨柱——截图否决）
-    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* \(0\.26 \+ 0\.74 \* pow\(clamp\(trail, 0\.0, 1\.0\), 2\.4\)\) \* smoothstep\(0\.0, 0\.05, trail\)/);
+    // 双段曲线：0.34 底座 + 0.66·pow(trail,2.2) 陡坡（单 pow 1.15 平塌无对比——截图否决；v7 参考图提亮底座）
+    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* \(0\.34 \+ 0\.66 \* pow\(clamp\(trail, 0\.0, 1\.0\), 2\.2\)\) \* smoothstep\(0\.0, 0\.05, trail\)/);
     expect(rainCode).toMatch(/isHead = step\(0\.0, dist01\) \* \(1\.0 - step\(0\.022, dist01\)\)/);
     // 拖尾长度断言：必须显著过半列高（原版黑罩拖尾几乎贯穿全列；define 在常量区，全源断言）
     expect(VERTEX_SHADER).toMatch(/#define RAIN_TRAIL\s+0\.7\d/);
     // 字符场必须盖满 16:9 全屏视口（FOV45 radius9.5 下视口 ≈14.0×7.9；7.4 高时上下露空带——截图实锤）
     expect(VERTEX_SHADER).toMatch(/#define RAIN_W\s+15\.0/);
     expect(VERTEX_SHADER).toMatch(/#define RAIN_H\s+8\.8/);
+    // v7 参考图密度：~100 列（列距 ≈13px），行距同步收紧到 ≈12px——64 列「间隔有点大」被否
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_COLS\s+100\.0/);
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_ROWS\s+64\.0/);
   });
 
   it('字形五段字符带：自上而下 字母→数字→汉字→符号→希腊（带界=字符数累计占比），段内低频闪烁', () => {
