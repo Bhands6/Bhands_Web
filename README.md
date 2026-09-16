@@ -96,7 +96,12 @@ npm run dev
 
 ## 🖥️ 服务器部署
 
-项目使用 Docker Compose 部署，Caddy 提供 HTTPS 反代：
+生产为三容器架构（Docker Compose）：
+
+```
+用户 ──HTTPS 443──> Caddy（自动 TLS / 反代） ──> web（单端口 6628，同源托管前端静态资源 + API）
+                                                    └─ 内网 ──> go-music-api（智能换源解析，不暴露端口）
+```
 
 ```bash
 # 构建并启动（caddy profile 启用反向代理）
@@ -104,6 +109,19 @@ docker compose build
 docker compose --profile caddy up -d
 ```
 
+> ⚠️ 若修改了 `Caddyfile`（挂载文件），`compose up -d` 不会自动重启 caddy 容器，
+> 需手动 `docker restart <caddy容器名>` 加载新配置，否则外网会 502。
+
+### 更新升级
+
+```bash
+# 拉取最新代码后重新构建并启动
+git pull
+docker compose build
+docker compose --profile caddy up -d
+```
+
+Windows 本地部署同理：重新运行 `deploy-local.bat` 即可（自动重装依赖 → 重建 → 重启）。
 
 ### 音频 302 直连
 
@@ -122,6 +140,7 @@ STREAM_DIRECT_REDIRECT=off
 | `SESSION_PERSIST` | 登录会话持久化 | `on` |
 | `STREAM_DIRECT_REDIRECT` | 音频 302 直连开关 | `on` |
 | `TRUST_PROXY` | 信任反向代理头（取真实 IP） | `0` |
+| `GO_MUSIC_API_URL` | go-music-api 智能换源服务地址（容器内网） | 容器编排内自动注入 |
 
 完整配置见 [.env.example](.env.example)。
 
@@ -182,6 +201,41 @@ Bhands_Web/
 2. 在 `apps/web/src/stores/useSettingsStore.ts` 的 `ParticleEffect` 联合类型注册，并核对各画质档粒子池规模
 3. 在 `apps/web/src/components/particleShaders.test.ts` 补断言（注意：vitest 须在 `apps/web` 目录下运行）
 4. 若含音频联动，只接亮度 / 缩放等观感量，不接位置量
+
+### 测试与质量
+
+```bash
+npm test          # 双端 vitest（web + server，共 230+ 用例）
+npm run lint      # oxlint
+```
+
+> ⚠️ vitest 必须在 `apps/web` / `apps/server` 目录下运行，仓库根目录缺少 vitest 配置会报 jsdom 假错误。
+
+## ❓ 常见问题
+
+<details>
+<summary><b>端口 6628 被占用 / 想换端口？</b></summary>
+
+启动前设置环境变量 `PORT` 即可（如 `set PORT=8080` 后再 `npm start`）；Docker 部署改 `docker-compose.yml` 中的端口映射与 `PORT`。一键部署用户改 `deploy-local.bat` 里的 `PORT`。
+</details>
+
+<details>
+<summary><b>扫码登录二维码不显示 / 频繁掉线？</b></summary>
+
+网易云接口偶发抖动属正常，重试即可；掉线与 `SESSION_PERSIST` 有关，`on` 时会话持久化到磁盘，重启服务不丢失登录态。
+</details>
+
+<details>
+<summary><b>公网部署后外网访问不了？</b></summary>
+
+检查三件事：① 云防火墙/安全组放行 80、443（直连 API 场景另放行 `PORT`）；② DNS 已解析到服务器 IP；③ 若改过 `Caddyfile`，记得重启 caddy 容器。
+</details>
+
+<details>
+<summary><b>自定义音源脚本怎么用？</b></summary>
+
+登录管理员后在面板「音源脚本管理」上传 LX 格式 `.js` 脚本，脚本在 worker_threads + vm 沙盒中一次性解析执行、不落盘留存；内置音源随服务自动加载，不可删除。
+</details>
 
 ### 第三方音乐平台说明
 
