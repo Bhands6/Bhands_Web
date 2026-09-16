@@ -165,8 +165,8 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 // 顶点把字形索引经 vPack1.w 传入片元，片元按索引采样（uPreset>13.5 门控，替代圆形软点）。
 #define RAIN_COLS      64.0   // 字符列数（列 × 行 = 字符格；网格密度约 4.5 倍过剩，按 hash 保留）
 #define RAIN_ROWS      48.0   // 字符行数
-#define RAIN_W         13.2   // 字符场世界宽（radius 9.5 下铺满可视域）
-#define RAIN_H         7.4    // 字符场世界高
+#define RAIN_W         15.0   // 字符场世界宽（FOV45 radius9.5 下 16:9 全屏视口宽 ≈14.0，留边防露底）
+#define RAIN_H         8.8    // 字符场世界高（视口高 ≈7.9；7.4 时上下各露 ~35px 空带被截图实锤）
 #define RAIN_TRAIL     0.78   // 拖尾长度（占列高比例：头部之上 78% 可见渐隐——原版半透明黑罩拖尾几乎贯穿全列，0.45 时「每列只亮几格」被截图否决）
 #define RAIN_APPEAR    1.2    // 切入显现时长（秒，ease-out cubic）
 #define RAIN_KEEP      0.25   // 粒子保留率（网格密度 ≈ 字符格 4.5 倍，按 hash 采 1/4，近似每格一字符）
@@ -1346,10 +1346,12 @@ void main(){
     float crow01 = (rrow + 0.5 + (hash11(aRand * 7.7) - 0.5) * 0.5) / RAIN_ROWS;
     float ccol01 = (rcol + 0.5 + (hash11(aRand * 3.3) - 0.5) * 0.5) / RAIN_COLS;
     // ---- 拖尾亮度：头部之下未到达不可见；头部白热 → 矩阵绿渐隐 ----
-    // pow 1.15（原 1.6 太陡：中段尾部 alpha 腰斩，截图观感「稀稀拉拉几点」）
+    // 双段曲线（v2 单 pow 1.15 太平：整条尾迹同亮度读不出「雨柱」，只剩绿噪点感——截图实锤）：
+    // 近头 0.26 底座 + 0.74·pow(trail,2.4) 陡坡 → 头部 1.0 / 中段 0.48 / 远尾 0.26（≈4:1 对比）；
+    // 尾端 smoothstep(0.05) 软着陆，列回绕时无弹入硬边
     float dist01 = crow01 - head01;                       // >0 = 头部上方（已扫过）
     float trail = 1.0 - clamp(dist01 / RAIN_TRAIL, 0.0, 1.0);
-    float body = step(0.0, dist01) * pow(clamp(trail, 0.0, 1.0), 1.15);
+    float body = step(0.0, dist01) * (0.26 + 0.74 * pow(clamp(trail, 0.0, 1.0), 2.4)) * smoothstep(0.0, 0.05, trail);
     float isHead = step(0.0, dist01) * (1.0 - step(0.022, dist01));
     // ---- 字符闪烁：glyph 索引随时间跳变（每列独立速率）----
     // 0.6~2.0 次/秒（原 2~7Hz 太频，字符雨看着发躁；原版 2%/帧 ≈ 0.56 次/秒）
@@ -1480,11 +1482,12 @@ void main(){
     // 0.35→1.15，原版粒子「边飘边胀」的质感），星空星近大远小（0.55→0.90）。
     sz = clamp(depthSize * vPack1.w * (1.0 + uBass * 0.10 + uBeat * 0.06), 0.30, 3.20);
   } else if (uPreset > 13.5) {
-    // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（列距 0.206 / 行距 0.154 世界单位）。
+    // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（列距 0.234 / 行距 0.183 世界单位，v3 场扩到 15×8.8）。
     // ⚠️ sz→像素换算 = sz·uPixel·uPointScale(=particleSize·1.3)：系数 0.52 时字形只有
-    // ~4px（用户截图「看不见」实锤），要 ~13px 的可读字符必须放大到 2.3（sz≈8.7）。
+    // ~4px（用户截图「看不见」实锤）；2.3→13px 后 v3 列距增到 ~16px（对齐原版 16px 字号），
+    // 字形同步放大到 2.6≈15px——字形比格距小一圈才不重叠糊。
     // 片元按字形图集裁形，尺寸过大字形会互相重叠糊掉。
-    sz = clamp(depthSize * 2.3 * (1.0 + uBass * 0.08), 4.50, 14.00);
+    sz = clamp(depthSize * 2.6 * (1.0 + uBass * 0.08), 5.00, 16.00);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。

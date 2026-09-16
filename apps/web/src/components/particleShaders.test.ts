@@ -1183,11 +1183,14 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
 
   it('拖尾亮度：头部之下不可见（step 门控）、头部白热、绿色渐隐 pow 收锋', () => {
     expect(rainCode).toMatch(/dist01 = crow01 - head01/);
-    // pow 1.15：衰减平缓（1.6 时中段尾部太暗，「每列只亮几格」被截图否决）
-    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* pow\(clamp\(trail, 0\.0, 1\.0\), 1\.15\)/);
+    // 双段曲线：0.26 底座 + 0.74·pow(trail,2.4) 陡坡（单 pow 1.15 平塌无对比，读不出雨柱——截图否决）
+    expect(rainCode).toMatch(/body = step\(0\.0, dist01\) \* \(0\.26 \+ 0\.74 \* pow\(clamp\(trail, 0\.0, 1\.0\), 2\.4\)\) \* smoothstep\(0\.0, 0\.05, trail\)/);
     expect(rainCode).toMatch(/isHead = step\(0\.0, dist01\) \* \(1\.0 - step\(0\.022, dist01\)\)/);
     // 拖尾长度断言：必须显著过半列高（原版黑罩拖尾几乎贯穿全列；define 在常量区，全源断言）
     expect(VERTEX_SHADER).toMatch(/#define RAIN_TRAIL\s+0\.7\d/);
+    // 字符场必须盖满 16:9 全屏视口（FOV45 radius9.5 下视口 ≈14.0×7.9；7.4 高时上下露空带——截图实锤）
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_W\s+15\.0/);
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_H\s+8\.8/);
   });
 
   it('字形索引：hash(列,行,flicker) 经 vPack1.w 传入片元（64 格 clamp，字符随机闪烁）', () => {
