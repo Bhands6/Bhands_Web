@@ -1191,8 +1191,8 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
     // 字符场必须盖满 16:9 全屏视口（FOV45 radius9.5 下视口 ≈14.0×7.9；7.4 高时上下露空带——截图实锤）
     expect(VERTEX_SHADER).toMatch(/#define RAIN_W\s+15\.0/);
     expect(VERTEX_SHADER).toMatch(/#define RAIN_H\s+8\.8/);
-    // v7 参考图密度：~100 列（列距 ≈13px）；v8 用户定参 72 行（行距 ≈12px）+ 字符 20px
-    expect(VERTEX_SHADER).toMatch(/#define RAIN_COLS\s+100\.0/);
+    // v9 用户加密度：120 列（列距 ≈11px，8640 格）；v8 定参 72 行（行距 ≈12px）+ 字符 20px
+    expect(VERTEX_SHADER).toMatch(/#define RAIN_COLS\s+120\.0/);
     expect(VERTEX_SHADER).toMatch(/#define RAIN_ROWS\s+72\.0/);
     // 20px 定参（系数 3.5，px≈系数×5.7）——sz 校准反复横跳，锁进测试
     expect(rainCode).toMatch(/sz = clamp\(depthSize \* 3\.5/);

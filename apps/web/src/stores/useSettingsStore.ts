@@ -156,7 +156,7 @@ const DEFAULT_LYRICS: LyricsSettings = {
 
 /** 画质档位 → 粒子网格 / 渲染像素比上限（对齐桌面版 coverParticleGridForResolution：88~183，默认 118×118） */
 export const QUALITY_PROFILES: Record<RenderQuality, { particles: number; dust: number; pixelRatio: number }> = {
-  eco: { particles: 88 * 88, dust: 120, pixelRatio: 1 },
+  eco: { particles: 97 * 97, dust: 120, pixelRatio: 1 },
   balanced: { particles: 108 * 108, dust: 220, pixelRatio: 1.5 },
   high: { particles: 118 * 118, dust: 380, pixelRatio: 2 },
   ultra: { particles: 168 * 168, dust: 560, pixelRatio: 2 }
