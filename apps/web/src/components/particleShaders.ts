@@ -147,6 +147,17 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define ROSE_LEAF_CENTER vec2(325.0, 210.0) // 花冠轴心（质心采样测定）：花冠放大与绽放 dist01 的基准
 #define ROSE_CROWN_SCALE 1.22  // 花冠整体放大系数（花瓣更显眼，茎/萼比例不变）
 #define ROSE_CROWN_SHARE 0.88  // 花冠粒子配额（0.88 = 88% 粒子给花瓣；0.80 仍嫌少上调，均匀时仅 61%）
+
+// ---------------- 心跳（预设 13）· HEART_* ----------------
+// 移植「科技祝福」页面：爱心曲线粒子 + 心跳包络 + 星空穿梭背景层。
+// 曲线（页面原式）：x=160·sin³(t)，y=130cos t−50cos2t−20cos3t−10cos4t+25（t∈[−π,π]）
+// 采样测定（tmp-heart-sampling.mjs）：曲线 x∈[−160,160] y∈[−145,144]；含漂移最大半径 232px。
+#define HEART_SCALE      0.0145 // 页面 px → 世界（心宽 ~4.6 世界单位，含漂移外沿 ~6.0）
+#define HEART_LIFE       2.0    // 粒子寿命（秒，循环）；原版粒子池 duration=2
+#define HEART_V0         100.0  // 径向外飘初速（px/s，原版 velocity=100）
+#define HEART_DRAG       0.75   // 线性减速系数（原版 effect=−0.75：v(τ)=v0(1−0.75τ)）
+#define HEART_APPEAR     1.6    // 切入显现时长（秒，ease-out cubic，从心中心向外径向扫开）
+#define HEART_STAR_SHARE 0.22   // 星空背景层粒子占比（原版另一块星空 canvas 的化身）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1088,7 +1099,7 @@ void main(){
 //  · 主层 Additive（ParticleStage 门控）：黑底 + 红粉叠加出花瓣发光质感
 //  · 音频只进亮度与整体微缩放（工作流 4.7③），不接位置量
   // ====================================================
-  else {
+  else if (uPreset < 12.5) {
     // ---- 显现进度：切入预设起算（uGalaxyAge 对 rose 也在切入时归零），ease-out cubic ----
     float appearRaw = clamp(uGalaxyAge / ROSE_APPEAR, 0.0, 1.0);
     float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
@@ -1226,6 +1237,78 @@ void main(){
   }
 
   // ====================================================
+  //  Preset 13: HEART — 心跳（移植「科技祝福」页面的爱心粒子系统）
+  //
+  //  原版：Canvas 2D 双层 —— ①爱心粒子：沿爱心参数曲线生成，径向外飘（初速
+  //  100px/s、线性减速 0.75/s），寿命 2s：尺寸 easeOutCube 增大 + alpha 线性衰减，
+  //  整颗心带 1.5s 心跳包络；②星空穿梭：300 星立方体分布、z 向前推进、透视投影。
+  //  粒子化映射：
+  //  · 生命周期改**循环**：life = fract(uGalaxyAge/LIFE + hash 相位)——等价原版
+  //    粒子池的持续发射，免 CPU 粒子池管理
+  //  · 心跳包络移植 CSS keyframes（lub-dub 双峰）+ uBeat：音乐鼓点让心随歌跳
+  //  · 背景星流取 22% 粒子（青/紫/白科技调），z 向相机推进 + 闪烁，与爱心前后景深分离
+  //  · 主层 Additive（ParticleStage 门控）：黑底 + 粉红叠加出霓虹发光质感
+  //  · 音频只进亮度与心跳（工作流 4.7③），不接位置量
+  // ====================================================
+  else {
+    // ---- 显现进度：切入预设起算（uGalaxyAge 对 heart 也在切入时归零）----
+    float appearRaw = clamp(uGalaxyAge / HEART_APPEAR, 0.0, 1.0);
+    float appear = 1.0 - pow(1.0 - appearRaw, 3.0);
+
+    // ---- 心跳包络：CSS keyframes（0.95→1.02→0.98）的 lub-dub 双峰近似，周期 1.5s ----
+    float hphase = mod(uGalaxyAge, 1.5) / 1.5;
+    float thump = sin(clamp(hphase / 0.16, 0.0, 1.0) * 3.14159) * 0.62
+                + sin(clamp((hphase - 0.30) / 0.20, 0.0, 1.0) * 3.14159) * 0.38;
+    float beatScale = 1.0 + thump * 0.05 + uBeat * 0.055;
+
+    // ---- 分桶：78% 爱心主体 / 22% 星空背景层 ----
+    bool isStar = hash11(aRand * 41.3) < HEART_STAR_SHARE;
+
+    if (isStar) {
+      // ---- 背景星流：随机分布 + z 向相机慢速推进回绕（近大远小）+ 闪烁 ----
+      float sr1 = hash11(aRand * 13.7);
+      float sr2 = hash11(aRand * 29.1);
+      float zc = fract(hash11(aRand * 47.9) + uGalaxyAge * 0.045);
+      pos = vec3((sr1 * 2.0 - 1.0) * 5.6, (sr2 * 2.0 - 1.0) * 3.2, -6.5 + zc * 5.5);
+      float twinkle = 0.55 + 0.45 * sin(uGalaxyAge * (1.2 + sr1 * 2.4) + sr2 * 6.28);
+      // 颜色：青/紫/白三色科技调（原版星空是彩虹 hsla，取页面强调色系更统一）
+      vec3 sc1 = vec3(0.30, 0.90, 1.00);
+      vec3 sc2 = vec3(0.62, 0.45, 1.00);
+      vColor = mix(mix(sc1, vec3(0.92, 0.96, 1.00), sr1), sc2, step(0.75, sr2));
+      vPack1.w = 0.55 + 0.35 * zc;                       // 近大远小（尺寸档位）
+      vAlpha = appear * twinkle * (0.45 + 0.45 * zc) * (1.0 + uBass * 0.10);
+      maxRippleAmp = max(maxRippleAmp, uBass * 0.04);
+    } else {
+      // ---- 爱心主体：沿参数曲线生成，径向外飘 + 减速，循环生命周期 ----
+      // ⚠️ sin³ 必须连乘——GLSL pow(负数, y) 未定义（项目铁律：pow 底数安全）
+      float ht = (hash11(aRand * 7.7) * 2.0 - 1.0) * 3.14159;
+      float st = sin(ht);
+      float hx = 160.0 * st * st * st;
+      float hy = 130.0 * cos(ht) - 50.0 * cos(2.0 * ht) - 20.0 * cos(3.0 * ht) - 10.0 * cos(4.0 * ht) + 25.0;
+      // 生命周期循环（等价原版粒子池持续发射）：life 在 0~1 间循环 → τ = life × 2s
+      float life = fract(uGalaxyAge / HEART_LIFE + hash11(aRand * 19.3));
+      float tau = life * HEART_LIFE;
+      // 径向外飘（原版：dir = 曲线点单位化 × 100px/s，线性减速 0.75/s）
+      // 位移积分 s(τ) = v0·τ − 0.5·drag·v0·τ²（τ=2 时 50px，之后速度转负往回漂）
+      float hr = length(vec2(hx, hy));
+      vec2 hdir = hr > 0.001 ? vec2(hx, hy) / hr : vec2(0.0, 1.0);
+      float travel = HEART_V0 * (tau - 0.5 * HEART_DRAG * tau * tau);
+      // 心跳包络整心缩放（含 uBeat 鼓点）；显现 = 从心中心向外径向扫开
+      vec2 hpos = (vec2(hx, hy) + hdir * travel) * HEART_SCALE * beatScale;
+      pos = vec3(hpos, 0.0);
+      float dist01 = clamp(length(vec2(hx, hy)) / 190.0, 0.0, 1.0);
+      float bloomIn = clamp((appear * 1.3 - dist01) * 4.0, 0.0, 1.0);
+      // 尺寸档位：随生命周期 easeOutCube 膨胀（0.35→1.15，原版粒子「边飘边胀」）
+      vPack1.w = 0.35 + 0.80 * (1.0 - pow(clamp(1.0 - life, 0.0, 1.0), 3.0));
+      // 颜色：粉红 #ff6b9d 基调，按曲线高度做深浅（顶部浅粉、底尖深红）
+      vColor = mix(vec3(0.98, 0.28, 0.46), vec3(1.00, 0.52, 0.72), clamp(0.5 + 0.5 * hy / 145.0, 0.0, 1.0));
+      // alpha：显现 × 生命周期线性衰减（原版 alpha = 1 − age/duration）
+      vAlpha = bloomIn * (1.0 - life) * (1.0 + uBass * 0.12);
+      maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uBeat * 0.04);
+    }
+  }
+
+  // ====================================================
   //  鼠标交互 (仅 SILK)
   // ====================================================
   if (uMouseActive > 0.5 && uPreset < 0.5) {
@@ -1276,10 +1359,13 @@ void main(){
       // 水母花（JELLY）：半透明纱质感靠低 alpha 叠层，额外增益保持克制；
       // 呼吸已由分支内 breath 相位承担，刻意不接 uBeat（拍点会让整朵齐闪）。
       vBright = 0.92 + maxRippleAmp * 0.60 + uBass * 0.05 + uEnergy * 0.04;
-    } else if (uPreset > 11.5) {
+    } else if (uPreset > 11.5 && uPreset < 12.5) {
       // 玫瑰（ROSE）：红粉光感靠低 alpha + Additive 叠层，亮度增益保持克制。
       // 2026-09-15 base 0.96→1.18：点尺寸调小后叠加次数减少，补偿整体亮度避免花变暗。
       vBright = 1.18 + maxRippleAmp * 0.50 + uBass * 0.06 + uEnergy * 0.04;
+    } else if (uPreset > 12.5) {
+      // 心跳（HEART）：心随歌跳——uBeat 直进亮度（这是本预设的灵魂，别处都收敛它）。
+      vBright = 1.12 + maxRippleAmp * 0.50 + uBass * 0.06 + uBeat * 0.10;
     }
   } else if (uPreset > 4.5) {
     vBright = 1.02 + maxRippleAmp * 0.34 + uBass * 0.020 + uEnergy * 0.026 + uBurstAmt * 0.025;
@@ -1313,11 +1399,15 @@ void main(){
     // （核心 1.35 / 光雾 1.6 / 花瓣 0.85 / 触须 0.45）。尺寸不接 uBeat：呼吸走相位，节拍撑大会整朵齐胀。
     // 0.40 下限保住触须丝的连续性（丝断了就散成点云）；上限 3.4 容纳光雾的大软点。
     sz = clamp(depthSize * vPack1.w * (1.0 + maxRippleAmp * 0.22), 0.40, 3.40);
-  } else if (uPreset > 11.5) {
+  } else if (uPreset > 11.5 && uPreset < 12.5) {
     // 玫瑰（ROSE）：细点花瓣质感，尺寸小而均匀（原版是 1px 点云），微接低音；
     // 上限收紧——点大了花瓣的「丝绒」细节会糊成一团颗粒。
     // 2026-09-15 用户调优：点更小（0.62→0.44）观感更细密；下限/上限同步收紧。
     sz = clamp(depthSize * 0.44 * (1.0 + uBass * 0.10 + uMid * 0.06), 0.40, 1.85);
+  } else if (uPreset > 12.5) {
+    // 心跳（HEART）：尺寸档位经 vPack1.w 传入——爱心粒子随生命周期膨胀（easeOutCube
+    // 0.35→1.15，原版粒子「边飘边胀」的质感），星空星近大远小（0.55→0.90）。
+    sz = clamp(depthSize * vPack1.w * (1.0 + uBass * 0.10 + uBeat * 0.06), 0.30, 3.20);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。

@@ -1049,16 +1049,23 @@ describe('唱片封面显著度（用户反馈「头像不够明显」）', () =
 });
 
 describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
-  // 玫瑰分支的截段：从 JELLY 注释之后到文件里最后一个兜底 else 块
-  const roseCode = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 12: ROSE'));
+  // 玫瑰分支的截段：从 ROSE 注释到 HEART 注释（预设 13 加入后 ROSE 不再是文件尾兜底）
+  const roseCode = VERTEX_SHADER.slice(
+    VERTEX_SHADER.indexOf('Preset 12: ROSE'),
+    VERTEX_SHADER.indexOf('Preset 13: HEART')
+  );
 
-  it('分支注册：11 改区间判定、12 用兜底 else，且在 JELLY 之后', () => {
+  it('分支注册：11/12 改区间判定、13 用兜底 else，顺序 JELLY→ROSE→HEART', () => {
     expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 11\.5\)/);
+    expect(VERTEX_SHADER).toMatch(/else if \(uPreset < 12\.5\)/);
     const i11 = VERTEX_SHADER.indexOf('Preset 11: JELLY');
     const i12 = VERTEX_SHADER.indexOf('Preset 12: ROSE');
+    const i13 = VERTEX_SHADER.indexOf('Preset 13: HEART');
     expect(i12, '预设 12 的分支必须存在').toBeGreaterThan(i11);
-    // 兜底必须仍是 else（不能是带条件的 else if），否则异常 uPreset 会落空分支
-    expect(roseCode).toMatch(/else \{/);
+    expect(i13, '预设 13 的分支必须存在').toBeGreaterThan(i12);
+    // 兜底必须是 HEART 的 else（不能是带条件的 else if），否则异常 uPreset 会落空分支
+    const heartCode = VERTEX_SHADER.slice(i13);
+    expect(heartCode).toMatch(/else \{/);
   });
 
   it('颜色公式逐式移植：mod(255 - sign(x)*floor(abs(x)), 256)/255（trunc 的 GLSL ES 1.00 兼容等价式）', () => {
@@ -1116,5 +1123,45 @@ describe('玫瑰（预设 12：参数化数学玫瑰）', () => {
 
   it('泛光层自动派生包含玫瑰分支（deriveBloomVertexShader 以 VERTEX_SHADER 为源）', () => {
     expect(BLOOM_VERTEX_SHADER).toContain('Preset 12: ROSE');
+  });
+});
+
+describe('心跳（预设 13：爱心曲线 + 心跳包络 + 星空背景）', () => {
+  const heartCode = VERTEX_SHADER.slice(VERTEX_SHADER.indexOf('Preset 13: HEART'));
+
+  it('爱心曲线逐式移植：x=160·sin³（连乘非 pow，负底数 pow 未定义）、y 四项余弦原式', () => {
+    expect(heartCode).toMatch(/160\.0 \* st \* st \* st/);
+    expect(heartCode).toMatch(
+      /130\.0 \* cos\(ht\) - 50\.0 \* cos\(2\.0 \* ht\) - 20\.0 \* cos\(3\.0 \* ht\) - 10\.0 \* cos\(4\.0 \* ht\) \+ 25\.0/
+    );
+    const codeOnly = heartCode.replace(/\/\/.*$/gm, '');
+    expect(codeOnly.includes('pow(sin'), 'sin³ 禁止用 pow（负底数未定义）').toBe(false);
+  });
+
+  it('生命周期循环（等价原版粒子池持续发射）+ 径向外飘减速的位移积分 + 尺寸档位经 vPack1.w', () => {
+    expect(heartCode).toMatch(/fract\(uGalaxyAge \/ HEART_LIFE \+ hash11\(aRand \* 19\.3\)\)/);
+    expect(heartCode).toMatch(/HEART_V0 \* \(tau - 0\.5 \* HEART_DRAG \* tau \* tau\)/);
+    expect(heartCode).toMatch(/vPack1\.w = 0\.35 \+ 0\.80 \* \(1\.0 - pow\(clamp\(1\.0 - life, 0\.0, 1\.0\), 3\.0\)\)/);
+  });
+
+  it('心跳包络（lub-dub 双峰，周期 1.5s）+ uBeat 鼓点加成：心随歌跳', () => {
+    expect(heartCode).toMatch(/mod\(uGalaxyAge, 1\.5\) \/ 1\.5/);
+    expect(heartCode).toMatch(/beatScale = 1\.0 \+ thump \* 0\.05 \+ uBeat \* 0\.055/);
+  });
+
+  it('星空背景层：分桶 22%、z 向相机推进回绕、近大远小尺寸档位', () => {
+    expect(heartCode).toMatch(/< HEART_STAR_SHARE/);
+    expect(heartCode).toMatch(/-6\.5 \+ zc \* 5\.5/);
+    expect(heartCode).toMatch(/vPack1\.w = 0\.55 \+ 0\.35 \* zc/);
+  });
+
+  it('alpha = 显现 × 生命周期线性衰减（原版 alpha = 1 − age/duration）', () => {
+    expect(heartCode).toMatch(/bloomIn \* \(1\.0 - life\)/);
+  });
+
+  it('pow 底数安全：心跳分支内所有 pow 底数均 clamp 包裹或为已 clamp 的 appearRaw', () => {
+    const code = heartCode.replace(/\/\/.*$/gm, '');
+    const bad = code.match(/pow\((?!(?:clamp|abs|max)\(|1\.0 - appearRaw)[^,)]+/g);
+    expect(bad, `发现未包裹底数的 pow：${bad === null ? '' : bad.join(' | ')}`).toBeNull();
   });
 });
