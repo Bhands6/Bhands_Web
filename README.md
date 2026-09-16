@@ -15,14 +15,12 @@
 ## ✨ 界面预览
 
 
-**首页**（未登录 / 登录后 / 发现页）
+**首页**（未登录 / 登录后 / 免登录页）
 
 <p align="center">
   <img src="docs/screenshots/02-home-guest.jpg" width="49%" alt="未登录首页">
   <img src="docs/screenshots/03-home-logged-in.jpg" width="49%" alt="登录后首页">
-</p>
-<p align="center">
-  <img src="docs/screenshots/19-home-discover.jpg" width="720" alt="热门新碟 · 发现页">
+  <img src="docs/screenshots/19-home-discover.jpg" width="720" alt="免登录页">
 </p>
 
 
@@ -36,7 +34,7 @@
 | ![](docs/screenshots/07-fx-vacuum.png)<br>**虚空** |![](docs/screenshots/08-fx-photo.jpg)<br>**唱片** | ![](docs/screenshots/09-fx-galaxy.png)<br>**星河** | 
 | ![](docs/screenshots/10-fx-aurora.jpg)<br>**极光** |![](docs/screenshots/11-fx-kaleidoscope.jpg)<br>**万花筒** | ![](docs/screenshots/12-fx-burst.jpg)<br>**迸发** | 
 | ![](docs/screenshots/13-fx-waveform.png)<br>**声波地形** |![](docs/screenshots/14-fx-spiral.jpg)<br>**螺旋星云** | ![](docs/screenshots/15-fx-jelly.jpg)<br>**水母花** | 
-| ![](docs/screenshots/16-fx-rose.jpg)<br>**玫瑰**（数学玫瑰曲线粒子化） |![](docs/screenshots/17-fx-heart.jpg)<br>**心跳**（lub-dub 双峰包络 + 内心星尘） | ![](docs/screenshots/18-fx-rain.png)<br>**字符雨**（Matrix 码雨 · 五段字符带） | 
+| ![](docs/screenshots/16-fx-rose.jpg)<br>**玫瑰** |![](docs/screenshots/17-fx-heart.jpg)<br>**心跳** | ![](docs/screenshots/18-fx-rain.png)<br>**字符雨** | 
 
 ## 🎵 功能特性
 
