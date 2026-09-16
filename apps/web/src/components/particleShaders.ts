@@ -1330,8 +1330,9 @@ void main(){
   //    按 hash 保留 RAIN_KEEP 比例（其余藏远景），近似每格一个字符
   //  · 每列一个下落头部 head01（随机速度/相位，fract 循环 = 到底回顶）
   //  · 拖尾亮度：头部白热 → 矩阵绿渐隐 → 未到达的行完全不可见（约 6 成粒子隐藏）
-  //  · 字符闪烁：glyph 索引 = hash(列, 行, floor(time·flicker))，经 vPack1.w
-  //    传入片元采样字形图集（uGlyphAtlas，9×9=81 字符：Latin/数字/汉字/希腊/符号）
+  //  · 字符带：字形按行位分五段，自上而下 = 字母→数字→汉字→符号→希腊；段内索引 =
+  //    hash(列, 行, floor(time·flicker))，经 vPack1.w 传入片元采样字形图集
+  //    （uGlyphAtlas，9×9=81 字符，图集顺序与带序一致：Latin/数字/汉字/符号/希腊）
   //  · 鼠标附近金色高亮（对齐原版 shadowColor 金）；音频只进亮度（工作流 4.7③）
   // ====================================================
   else {
@@ -1353,10 +1354,24 @@ void main(){
     float trail = 1.0 - clamp(dist01 / RAIN_TRAIL, 0.0, 1.0);
     float body = step(0.0, dist01) * (0.26 + 0.74 * pow(clamp(trail, 0.0, 1.0), 2.4)) * smoothstep(0.0, 0.05, trail);
     float isHead = step(0.0, dist01) * (1.0 - step(0.022, dist01));
-    // ---- 字符闪烁：glyph 索引随时间跳变（每列独立速率）----
+    // ---- 字符带 + 闪烁：字形按行位分五段，自上而下 = 字母→数字→汉字→符号→希腊（用户指定）----
+    // 带界 = 各段字符数累计占比（26/36/48/57 ÷ 81）；段内索引仍随 flicker 低频跳变，
     // 0.6~2.0 次/秒（原 2~7Hz 太频，字符雨看着发躁；原版 2%/帧 ≈ 0.56 次/秒）
     float flicker = floor(uGalaxyAge * (0.6 + hash11(rcol * 3.7) * 1.4));
-    float glyph = floor(hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617) * 81.0);
+    float bandRoll = hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617);
+    float band = crow01;
+    float glyph;
+    if (band < 0.321) {
+      glyph = floor(bandRoll * 26.0);           // 0..25   字母
+    } else if (band < 0.444) {
+      glyph = 26.0 + floor(bandRoll * 10.0);    // 26..35  数字
+    } else if (band < 0.593) {
+      glyph = 36.0 + floor(bandRoll * 12.0);    // 36..47  汉字
+    } else if (band < 0.704) {
+      glyph = 48.0 + floor(bandRoll * 9.0);     // 48..56  符号
+    } else {
+      glyph = 57.0 + floor(bandRoll * 24.0);    // 57..80  希腊
+    }
     vPack1.w = clamp(glyph, 0.0, 80.0);
     // ---- 世界坐标：铺满可视域；未保留的粒子藏远景 ----
     pos = mix(
@@ -1484,10 +1499,9 @@ void main(){
   } else if (uPreset > 13.5) {
     // 字符雨（RAIN）：字形点尺寸 ≈ 字符格边长（列距 0.234 / 行距 0.183 世界单位，v3 场扩到 15×8.8）。
     // ⚠️ sz→像素换算 = sz·uPixel·uPointScale(=particleSize·1.3)：系数 0.52 时字形只有
-    // ~4px（用户截图「看不见」实锤）；2.3→13px 后 v3 列距增到 ~16px（对齐原版 16px 字号），
-    // 字形同步放大到 2.6≈15px——字形比格距小一圈才不重叠糊。
+    // ~4px（用户截图「看不见」实锤）；2.3→13px、2.6→15px 后 v4 用户要求再放大到 3.0≈17px。
     // 片元按字形图集裁形，尺寸过大字形会互相重叠糊掉。
-    sz = clamp(depthSize * 2.6 * (1.0 + uBass * 0.08), 5.00, 16.00);
+    sz = clamp(depthSize * 3.0 * (1.0 + uBass * 0.08), 5.80, 18.50);
   } else if (uPreset > 8.5) {
     // 声波地形（SONIC）：地形是「连续的脊」，点尺寸要小而均匀，
     // 尺寸若跟着高度变化，脊顶会鼓成一串珠子、破坏地形的连续感。

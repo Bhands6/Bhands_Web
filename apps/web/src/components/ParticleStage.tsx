@@ -135,7 +135,7 @@ function makeGlyphAtlasTexture(): THREE.Texture {
   cv.width = cv.height = 288;   // 9×9 格、每格 32px（81 字符全量上集——256px 只够 8×8=64，17 个希腊字母被截断永不出现）
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, 288, 288);
-  ctx.font = '26px "Courier New", monospace';
+  ctx.font = '28px "Courier New", monospace';
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

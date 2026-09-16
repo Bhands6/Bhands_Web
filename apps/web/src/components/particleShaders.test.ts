@@ -1193,10 +1193,16 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
     expect(VERTEX_SHADER).toMatch(/#define RAIN_H\s+8\.8/);
   });
 
-  it('字形索引：hash(列,行,flicker) 经 vPack1.w 传入片元（64 格 clamp，字符随机闪烁）', () => {
+  it('字形五段字符带：自上而下 字母→数字→汉字→符号→希腊（带界=字符数累计占比），段内低频闪烁', () => {
     // 0.6~2.0 次/秒：低频突变（2~7Hz 时字符雨看着发躁）；图集 9×9=81 字符全量（64 时 17 个希腊字母被截断）
     expect(rainCode).toMatch(/flicker = floor\(uGalaxyAge \* \(0\.6 \+ hash11\(rcol \* 3\.7\) \* 1\.4\)\)/);
-    expect(rainCode).toMatch(/hash11\(rcol \* 91\.7 \+ rrow \* 7\.31 \+ flicker \* 0\.617\) \* 81\.0/);
+    expect(rainCode).toMatch(/bandRoll = hash11\(rcol \* 91\.7 \+ rrow \* 7\.31 \+ flicker \* 0\.617\)/);
+    // 带界必须与图集段序一致：字母 0..25 / 数字 26..35 / 汉字 36..47 / 符号 48..56 / 希腊 57..80
+    expect(rainCode).toMatch(/if \(band < 0\.321\)/);
+    expect(rainCode).toMatch(/else if \(band < 0\.444\)/);
+    expect(rainCode).toMatch(/else if \(band < 0\.593\)/);
+    expect(rainCode).toMatch(/else if \(band < 0\.704\)/);
+    expect(rainCode).toMatch(/57\.0 \+ floor\(bandRoll \* 24\.0\)/);
     expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 80\.0\)/);
   });
 
