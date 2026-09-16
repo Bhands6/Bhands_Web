@@ -1,5 +1,7 @@
 <h1 align="center">BhandsMusic Web</h1>
 
+<h1 align="center">沉浸式在线音乐播放器 · 让音乐看得见</h1>
+
 <p align="center">
   <img src="docs/screenshots/01-landing.jpg" width="720" alt="启动页">
 </p>
@@ -93,24 +95,6 @@ npm start
 # 前后端并行启动（前端 5173 / 后端 6628）
 npm run dev
 ```
-
-## 🖥️ 服务器部署
-
-生产为三容器架构（Docker Compose）：
-
-```
-用户 ──HTTPS 443──> Caddy（自动 TLS / 反代） ──> web（单端口 6628，同源托管前端静态资源 + API）
-                                                    └─ 内网 ──> go-music-api（智能换源解析，不暴露端口）
-```
-
-```bash
-# 构建并启动（caddy profile 启用反向代理）
-docker compose build
-docker compose --profile caddy up -d
-```
-
-> ⚠️ 若修改了 `Caddyfile`（挂载文件），`compose up -d` 不会自动重启 caddy 容器，
-> 需手动 `docker restart <caddy容器名>` 加载新配置，否则外网会 502。
 
 ### 更新升级
 
