@@ -1165,6 +1165,24 @@ describe('心跳（预设 13：爱心曲线 + 心跳包络 + 星空背景）', (
     expect(heartCode).toMatch(/bloomIn \* \(1\.0 - life\)/);
   });
 
+  it('v2 修尖刺 + 柔化核心 + 内心星尘：三层分桶、奇点漂移抑制、发射点抖动、向心收缩星尘', () => {
+    // ⚠️ #define 在常量区（heartCode 切片从 'Preset 13: HEART' 起），必须断言全源
+    expect(VERTEX_SHADER).toMatch(/#define HEART_DUST_SHARE\s+0\.18/);
+    expect(heartCode).toMatch(/bool isDust = !isStar && bucket < HEART_STAR_SHARE \+ HEART_DUST_SHARE/);
+    // 奇点漂移抑制：t≈0 凹口 / t≈±π 底尖是参数尖点（x′y′ 同趋零 → 密度堆叠 + 纯竖直漂移
+    // = 上下两根针状刺），|x| 越小漂移越弱、越暗（留在尖点上勾 V 形轮廓）
+    expect(heartCode).toMatch(/float axisDamp = smoothstep\(0\.0, 30\.0, abs\(hx\)\)/);
+    expect(heartCode).toMatch(/0\.08 \+ 0\.92 \* axisDamp/);
+    expect(heartCode).toMatch(/mix\(0\.35, 1\.0, axisDamp\)/);
+    // 柔化核心：发射点 ±7px 二维抖动（白热霓虹管摊成柔光带）+ 年轻减亮（0.45 起步）
+    expect(heartCode).toMatch(/hash11\(aRand \* 23\.7\) - 0\.5, hash11\(aRand \* 31\.9\) - 0\.5\) \* 14\.0/);
+    expect(heartCode).toMatch(/0\.45 \+ 0\.55 \* smoothstep\(0\.0, 0\.30, life\)/);
+    // 内心星尘：同款曲线 → 向原点收缩 s∈[0.12,0.78]（星形性保证必在心内）+ 闪烁 + 心跳呼吸
+    expect(heartCode).toMatch(/0\.12 \+ 0\.66 \* hash11\(aRand \* 61\.1\)/);
+    expect(heartCode).toMatch(/vPack1\.w = 0\.40;/);
+    expect(heartCode).toMatch(/0\.14 \+ 0\.10 \* thump/);
+  });
+
   it('pow 底数安全：心跳分支内所有 pow 底数均 clamp 包裹或为已 clamp 的 appearRaw', () => {
     const code = heartCode.replace(/\/\/.*$/gm, '');
     const bad = code.match(/pow\((?!(?:clamp|abs|max)\(|1\.0 - appearRaw)[^,)]+/g);

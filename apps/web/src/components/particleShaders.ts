@@ -158,6 +158,7 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define HEART_DRAG       0.75   // 线性减速系数（原版 effect=−0.75：v(τ)=v0(1−0.75τ)）
 #define HEART_APPEAR     1.6    // 切入显现时长（秒，ease-out cubic，从心中心向外径向扫开）
 #define HEART_STAR_SHARE 0.22   // 星空背景层粒子占比（原版另一块星空 canvas 的化身）
+#define HEART_DUST_SHARE 0.18   // 内心星尘占比（v2：曲线主体 0.60 / 星尘 0.18 / 星空 0.22——空心被否，向内撒星雾）
 
 // ---------------- 字符雨（预设 14）· RAIN_* ----------------
 // 移植 Matrix 风格字母雨页面：列式下落字符 + 拖尾渐隐 + 鼠标金色高亮。
@@ -1258,6 +1259,8 @@ void main(){
   //    粒子池的持续发射，免 CPU 粒子池管理
   //  · 心跳包络移植 CSS keyframes（lub-dub 双峰）+ uBeat：音乐鼓点让心随歌跳
   //  · 背景星流取 22% 粒子（青/紫/白科技调），z 向相机推进 + 闪烁，与爱心前后景深分离
+//  · v2 观感（用户选向）：①奇点漂移抑制+双重减亮修上下尖刺与白管过曝；②新增 18% 内心
+//    星尘层（向心收缩曲线采样，必在心形内部），空心变实心发光体
 //  · 主层 Additive（ParticleStage 门控）：黑底 + 粉红叠加出霓虹发光质感
 //  · 音频只进亮度与心跳（工作流 4.7③），不接位置量
   // ====================================================
@@ -1272,8 +1275,10 @@ void main(){
                 + sin(clamp((hphase - 0.30) / 0.20, 0.0, 1.0) * 3.14159) * 0.38;
     float beatScale = 1.0 + thump * 0.05 + uBeat * 0.055;
 
-    // ---- 分桶：78% 爱心主体 / 22% 星空背景层 ----
-    bool isStar = hash11(aRand * 41.3) < HEART_STAR_SHARE;
+    // ---- 分桶：60% 爱心主体 / 18% 内心星尘 / 22% 星空背景层 ----
+    float bucket = hash11(aRand * 41.3);
+    bool isStar = bucket < HEART_STAR_SHARE;
+    bool isDust = !isStar && bucket < HEART_STAR_SHARE + HEART_DUST_SHARE;
 
     if (isStar) {
       // ---- 背景星流：随机分布 + z 向相机慢速推进回绕（近大远小）+ 闪烁 ----
@@ -1289,6 +1294,24 @@ void main(){
       vPack1.w = 0.55 + 0.35 * zc;                       // 近大远小（尺寸档位）
       vAlpha = appear * twinkle * (0.45 + 0.45 * zc) * (1.0 + uBass * 0.10);
       maxRippleAmp = max(maxRippleAmp, uBass * 0.04);
+    } else if (isDust) {
+      // ---- 内心星尘：同款曲线采样 → 向原点收缩（原点在心形核内，星形性保证必在内部）
+      //      → 粉/紫微光，随 lub-dub 呼吸明暗、独立闪烁——「空心霓虹管」变「实心发光体」----
+      float dt1 = (hash11(aRand * 7.7) * 2.0 - 1.0) * 3.14159;
+      float dst = sin(dt1);
+      float dx = 160.0 * dst * dst * dst;
+      float dy = 130.0 * cos(dt1) - 50.0 * cos(2.0 * dt1) - 20.0 * cos(3.0 * dt1) - 10.0 * cos(4.0 * dt1) + 25.0;
+      float s = 0.12 + 0.66 * hash11(aRand * 61.1);      // 收缩系数 0.12~0.78：s<0.78 时到边界
+                                                          // 最近距离 > 抖动幅度，星尘不越界
+      vec2 dpos = vec2(dx, dy) * s
+                + vec2(hash11(aRand * 23.7) - 0.5, hash11(aRand * 31.9) - 0.5) * 13.0;
+      pos = vec3(dpos * HEART_SCALE * beatScale, 0.0);
+      // 粉/紫双色调 + 独立闪烁；亮度随心跳包络呼吸（thump 同步胀缩）
+      vColor = mix(vec3(0.95, 0.42, 0.60), vec3(0.66, 0.42, 0.98), step(0.5, hash11(aRand * 53.7)));
+      float tw = 0.5 + 0.5 * sin(uGalaxyAge * (0.9 + hash11(aRand * 13.7) * 1.8) + hash11(aRand * 29.1) * 6.28);
+      vPack1.w = 0.40;
+      vAlpha = appear * tw * (0.14 + 0.10 * thump) * (1.0 + uBass * 0.10);
+      maxRippleAmp = max(maxRippleAmp, uBass * 0.03);
     } else {
       // ---- 爱心主体：沿参数曲线生成，径向外飘 + 减速，循环生命周期 ----
       // ⚠️ sin³ 必须连乘——GLSL pow(负数, y) 未定义（项目铁律：pow 底数安全）
@@ -1303,9 +1326,15 @@ void main(){
       // 位移积分 s(τ) = v0·τ − 0.5·drag·v0·τ²（τ=2 时 50px，之后速度转负往回漂）
       float hr = length(vec2(hx, hy));
       vec2 hdir = hr > 0.001 ? vec2(hx, hy) / hr : vec2(0.0, 1.0);
-      float travel = HEART_V0 * (tau - 0.5 * HEART_DRAG * tau * tau);
+      // 奇点漂移抑制：t≈0（凹口）/ t≈±π（底尖）是参数尖点（x'、y' 同时→0），均匀 t 采样
+      // 使 ~1.6% 粒子堆在同一点且径向=纯竖直 → 上下两根针状刺（v2 截图实锤）。
+      // |x| 越小漂移越弱（留在尖点上勾出 V 形轮廓，不再拖出竖列）
+      float axisDamp = smoothstep(0.0, 30.0, abs(hx));
+      float travel = HEART_V0 * (tau - 0.5 * HEART_DRAG * tau * tau) * (0.08 + 0.92 * axisDamp);
+      // 柔化核心：发射点沿 ±7px 二维抖动——白热「霓虹管」摊成柔光带（v2 截图实锤过曝）
+      vec2 hbase = vec2(hx, hy) + vec2(hash11(aRand * 23.7) - 0.5, hash11(aRand * 31.9) - 0.5) * 14.0;
       // 心跳包络整心缩放（含 uBeat 鼓点）；显现 = 从心中心向外径向扫开
-      vec2 hpos = (vec2(hx, hy) + hdir * travel) * HEART_SCALE * beatScale;
+      vec2 hpos = (hbase + hdir * travel) * HEART_SCALE * beatScale;
       pos = vec3(hpos, 0.0);
       float dist01 = clamp(length(vec2(hx, hy)) / 190.0, 0.0, 1.0);
       float bloomIn = clamp((appear * 1.3 - dist01) * 4.0, 0.0, 1.0);
@@ -1313,8 +1342,11 @@ void main(){
       vPack1.w = 0.35 + 0.80 * (1.0 - pow(clamp(1.0 - life, 0.0, 1.0), 3.0));
       // 颜色：粉红 #ff6b9d 基调，按曲线高度做深浅（顶部浅粉、底尖深红）
       vColor = mix(vec3(0.98, 0.28, 0.46), vec3(1.00, 0.52, 0.72), clamp(0.5 + 0.5 * hy / 145.0, 0.0, 1.0));
-      // alpha：显现 × 生命周期线性衰减（原版 alpha = 1 − age/duration）
-      vAlpha = bloomIn * (1.0 - life) * (1.0 + uBass * 0.12);
+      // alpha：显现 × 生命周期衰减 × 双重柔化——
+      //   ①年轻减亮（life≈0 全压在曲线上加色叠成白管，0.45 起步 30% 寿命内爬满）；
+      //   ②奇点减亮（尖点堆叠密度∞，与漂移抑制配套把针根压暗）
+      vAlpha = bloomIn * (1.0 - life) * (0.45 + 0.55 * smoothstep(0.0, 0.30, life))
+             * mix(0.35, 1.0, axisDamp) * (1.0 + uBass * 0.12);
       maxRippleAmp = max(maxRippleAmp, uBass * 0.05 + uBeat * 0.04);
     }
   }
