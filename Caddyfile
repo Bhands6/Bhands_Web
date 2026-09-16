@@ -10,7 +10,7 @@ bhands.icu {
 	encode gzip zstd
 
 	# 音频流代理需要支持 Range 断点续传（拖动进度条），Caddy 默认支持
-	reverse_proxy bhandsmusic:3001 {
+	reverse_proxy bhandsmusic:6628 {
 		# 流式传输（音频/歌词接口长连接）
 		flush_interval -1
 		# 删除上游静态插件自带的 cache-control（响应头用 header_down），

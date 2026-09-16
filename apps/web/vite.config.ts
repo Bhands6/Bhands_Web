@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       // 开发环境代理到后端，避免 CORS 与硬编码地址
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:6628',
         changeOrigin: true,
         configure: (proxy) => {
           // tsx watch 热重启后端的几秒内前端轮询会 ECONNREFUSED，

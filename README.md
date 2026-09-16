@@ -72,7 +72,7 @@
 2. 双击根目录的 **`deploy-local.bat`**
 3. 脚本自动完成：安装依赖 → 构建前端 → 启动服务 → 打开浏览器
 
-完成后访问 [http://localhost:3001](http://localhost:3001) 即可使用。
+完成后访问 [http://localhost:6628](http://localhost:6628) 即可使用。
 
 ### 方式二：手动部署
 
@@ -83,14 +83,14 @@ npm install
 # 2. 构建
 npm run build
 
-# 3. 启动（单端口 3001，同时托管前端静态资源与 API）
+# 3. 启动（单端口 6628，同时托管前端静态资源与 API）
 npm start
 ```
 
 ### 开发模式
 
 ```bash
-# 前后端并行启动（前端 5173 / 后端 3001）
+# 前后端并行启动（前端 5173 / 后端 6628）
 npm run dev
 ```
 
@@ -117,7 +117,7 @@ STREAM_DIRECT_REDIRECT=off
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `PORT` | 服务端口 | `3001` |
+| `PORT` | 服务端口 | `6628` |
 | `HOST` | 监听地址 | `0.0.0.0` |
 | `SESSION_PERSIST` | 登录会话持久化 | `on` |
 | `STREAM_DIRECT_REDIRECT` | 音频 302 直连开关 | `on` |

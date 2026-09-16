@@ -64,20 +64,20 @@ if not exist "apps\server\dist\index.js" (
 echo [3/4] 构建完成
 
 REM ---- [4/4] start server in a new window ----
-REM PORT=3001  HOST=127.0.0.1 (本机访问；如需局域网设备一起听改成 0.0.0.0)
+REM PORT=6628  HOST=127.0.0.1 (本机访问；如需局域网设备一起听改成 0.0.0.0)
 REM SESSION_PERSIST=on  本地部署开启：重启后不用重新扫码登录
-set "PORT=3001"
+set "PORT=6628"
 set "HOST=127.0.0.1"
 set "SESSION_PERSIST=on"
 cd /d "%~dp0apps\server"
 echo [4/4] 启动服务（新窗口 BhandsMusic Server）...
 start "BhandsMusic Server" cmd /k node dist\index.js
 timeout /t 4 /nobreak >nul
-start "" http://localhost:3001
+start "" http://localhost:6628
 
 echo.
 echo ============================================
-echo   部署完成！浏览器已打开 http://localhost:3001
+echo   部署完成！浏览器已打开 http://localhost:6628
 echo.
 echo   - 「BhandsMusic Server」窗口是服务本体，别关（关闭即停止）
 echo   - 听歌走你自己的网络与音源，不占任何服务器带宽

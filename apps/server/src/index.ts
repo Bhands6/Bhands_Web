@@ -99,7 +99,7 @@ async function main() {
   }
 
   try {
-    const port = parseInt(process.env.PORT || '3001');
+    const port = parseInt(process.env.PORT || '6628');
     const host = process.env.HOST || '0.0.0.0';
     await server.listen({ port, host });
     console.log(`Server is running on http://${host}:${port}`);
