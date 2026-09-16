@@ -169,7 +169,6 @@ varying vec2 vMeteorCenter;   // 流星拖尾的窗口像素中心（与片元 g
 #define RAIN_H         8.8    // 字符场世界高（视口高 ≈7.9；7.4 时上下各露 ~35px 空带被截图实锤）
 #define RAIN_TRAIL     0.78   // 拖尾长度（占列高比例：头部之上 78% 可见渐隐——原版半透明黑罩拖尾几乎贯穿全列，0.45 时「每列只亮几格」被截图否决）
 #define RAIN_APPEAR    1.2    // 切入显现时长（秒，ease-out cubic）
-#define RAIN_KEEP      0.25   // 粒子保留率（网格密度 ≈ 字符格 4.5 倍，按 hash 采 1/4，近似每格一字符）
 // v2 改动（2026-09-11 用户截图：v1 花瓣读成「辐条」而非有面的花瓣、整体偏暗偏稀）：
 // 花瓣填面（横向散布正比于瓣长，±30%）、加光雾层、核心/花瓣/触须全面提亮加大、触须加慢弯。
 
@@ -1326,8 +1325,8 @@ void main(){
   //  原版：Canvas 2D 逐列画字符（半透明黑罩出拖尾），字符随机闪烁；鼠标附近
   //  金色高亮 + 光晕；点击产生字母波纹环（波纹依赖点击事件，舞台无此输入，v1 不搬）。
   //  粒子化映射：
-  //  · 粒子网格离散成 RAIN_COLS × RAIN_ROWS 的字符格；网格密度约为字符格 4.5 倍，
-  //    按 hash 保留 RAIN_KEEP 比例（其余藏远景），近似每格一个字符
+  //  · 粒子网格按「细网格线性序 mod 3072」双射离散成 RAIN_COLS × RAIN_ROWS 的字符格：
+  //    每格恰一粒子（槽 0），其余粒子藏远景——单列纵队，无双字挤格
   //  · 每列一个下落头部 head01（随机速度/相位，fract 循环 = 到底回顶）
   //  · 拖尾亮度：头部白热 → 矩阵绿渐隐 → 未到达的行完全不可见（约 6 成粒子隐藏）
   //  · 字符带：字形按行位分五段，自上而下 = 字母→数字→汉字→符号→希腊；段内索引 =
@@ -1336,10 +1335,19 @@ void main(){
   //  · 鼠标附近金色高亮（对齐原版 shadowColor 金）；音频只进亮度（工作流 4.7③）
   // ====================================================
   else {
-    // ---- 字符格离散 + 保留采样（网格密度过剩，按 hash 保留 RAIN_KEEP）----
-    float rcol = floor(aUv.x * RAIN_COLS);
-    float rrow = floor(aUv.y * RAIN_ROWS);
-    float kept = step(hash11(aRand * 53.1), RAIN_KEEP);
+    // ---- 字符格双射：细网格线性序 mod 3072 → 每格恰一粒子 ----
+    // v4 前是「网格过剩 4.5 倍 + hash 概率保留」（泊松采样，λ≈1.125：三成格子挤双字、
+    // 两成空格——用户截图「俩竖挤在一竖里面」实锤）。双射：aUv=(i+0.5)/uGrid → floor
+    // 还原格点 → pid=gy·uGrid+gx；slot=floor(pid/3072)，只保留 slot 0（前 3072 颗），
+    // 其余藏远景。mod 3072 对 pid 是完备覆盖 → 3072 格恰好各得一颗，单列纵队。
+    // 全档位网格 ≥88²=7744 > 3072，槽 0 恒存在。
+    float rainGx = floor(aUv.x * uGrid);
+    float rainGy = floor(aUv.y * uGrid);
+    float rainPid = rainGy * uGrid + rainGx;
+    float rainCell = mod(rainPid, RAIN_COLS * RAIN_ROWS);
+    float kept = step(rainPid, RAIN_COLS * RAIN_ROWS - 0.5);
+    float rcol = mod(rainCell, RAIN_COLS);
+    float rrow = floor(rainCell / RAIN_COLS);
     // ---- 每列下落头部：随机速度/相位，fract 循环（到底回顶，同原版 drops 重置）----
     // 0.38 档：单列全程 2.0~4.8s（原版 35ms/行 ≈ 全程 1.7~2.3s；0.22 时 3.5~8s 太拖沓）
     float colSpeed = 0.55 + hash11(rcol * 17.1) * 0.75;
@@ -1359,7 +1367,9 @@ void main(){
     // 0.6~2.0 次/秒（原 2~7Hz 太频，字符雨看着发躁；原版 2%/帧 ≈ 0.56 次/秒）
     float flicker = floor(uGalaxyAge * (0.6 + hash11(rcol * 3.7) * 1.4));
     float bandRoll = hash11(rcol * 91.7 + rrow * 7.31 + flicker * 0.617);
-    float band = crow01;
+    // band：crow01=1 是屏幕顶部（three.js +y 朝上），取 1−crow01 才是「屏幕自上而下」——
+    // v4 直接用 crow01 把整条带序装反了（字母沉底、希腊升顶，截图实锤）
+    float band = 1.0 - crow01;
     float glyph;
     if (band < 0.321) {
       glyph = floor(bandRoll * 26.0);           // 0..25   字母

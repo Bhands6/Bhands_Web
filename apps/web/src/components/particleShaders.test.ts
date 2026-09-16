@@ -1206,11 +1206,17 @@ describe('字符雨（预设 14：Matrix 码雨 + 字形图集管线）', () => 
     expect(rainCode).toMatch(/vPack1\.w = clamp\(glyph, 0\.0, 80\.0\)/);
   });
 
-  it('鼠标附近金色高亮（对齐原版 shadowColor 金）+ 网格密度过剩按 hash 保留', () => {
+  it('鼠标附近金色高亮（对齐原版 shadowColor 金）+ 字符格双射（每格恰一粒子，无双字挤格）', () => {
     expect(rainCode).toMatch(/distance\(pos\.xy, uMouseXY\)/);
     expect(rainCode).toMatch(/vec3\(1\.00, 0\.85, 0\.25\)/);
-    expect(rainCode).toMatch(/step\(hash11\(aRand \* 53\.1\), RAIN_KEEP\)/);
+    // 双射：pid=gy·uGrid+gx → mod 3072 取格 → 只保留槽 0（v4 前 hash 概率保留是泊松采样，
+    // λ≈1.125 时三成格子挤双字——「俩竖挤在一竖里面」被截图实锤）
+    expect(rainCode).toMatch(/rainPid = rainGy \* uGrid \+ rainGx/);
+    expect(rainCode).toMatch(/mod\(rainPid, RAIN_COLS \* RAIN_ROWS\)/);
+    expect(rainCode).toMatch(/kept = step\(rainPid, RAIN_COLS \* RAIN_ROWS - 0\.5\)/);
     expect(rainCode).toMatch(/vec3\(0\.0, 0\.0, -90\.0\)/);
+    // 字符带方向：crow01=1 是屏幕顶部（three.js +y 朝上），必须取 1−crow01 才是自上而下
+    expect(rainCode).toMatch(/band = 1\.0 - crow01/);
   });
 
   it('片元：字形图集采样路径（uPreset>13.5 门控 + 9×9 格定位 + flipY 校正 + discard 抠字）', () => {
