@@ -89,6 +89,9 @@ pids
 # Serverless directories
 .serverless
 
+# Vercel CLI 本地链接状态（项目配置，勿提交）
+.vercel/
+
 # FuseBox cache
 .fusebox/
 
@@ -97,3 +100,5 @@ pids
 
 # TernJS port file
 .tern-port
+
+.vercel

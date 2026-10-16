@@ -1,0 +1,29 @@
+# ===== Vercel 部署上传排除清单 =====
+# 注意：存在 .vercelignore 时 .gitignore 不参与上传过滤，
+# 敏感文件（.env / data/）必须在此显式排除，否则会随部署上传。
+
+# 密钥与本地配置（.env 含 ADMIN_TOKEN）
+.env
+.env.*
+
+# 版本库与 Vercel CLI 本地链接状态
+.git
+.vercel
+
+# 依赖（构建机执行 npm ci 重装；node_modules 上传无意义且体积巨大）
+node_modules
+
+# 运行时数据（网易云 cookie 存档 ncm-cookies.json / LX 脚本存档 lx-scripts.json，
+# 只存本地与生产服务器，绝不外传）
+data
+
+# 本地构建产物（Vercel 构建时重新生成）
+dist
+
+# 测试与日志产物
+coverage
+*.log
+
+# 部署归档包（防误传）
+*.tar.gz
+*.zip
