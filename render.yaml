@@ -1,0 +1,34 @@
+# Render Blueprint —— Bhands_Web 单容器部署（前端静态 + Fastify API + 音源解析）
+# 用法：Render Dashboard → New → Blueprint → 选本仓库，或直接 New → Web Service 手填同样配置
+services:
+  - type: web
+    name: bhands-web
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      # 容器内必须监听 0.0.0.0，否则 Render 探活失败
+      - key: HOST
+        value: 0.0.0.0
+      # Render 在最前面有反向代理：需要它才能拿到真实客户端 IP 与 https 协议
+      - key: TRUST_PROXY
+        value: "1"
+      # 免费实例无持久磁盘：关闭登录 cookie 落盘，重启后用户重新扫码
+      - key: SESSION_PERSIST
+        value: "off"
+      # 网易 CDN 直链 302 给浏览器，音频流量不过服务器 —— 免费额度下非常关键
+      - key: STREAM_DIRECT_REDIRECT
+        value: "on"
+      # 同域部署（前端静态由同一 Fastify 提供），不需要跨域白名单
+      - key: CORS_ORIGINS
+        value: ""
+      - key: STREAM_HOST_ALLOWLIST
+        value: ""
+      # LX 音源脚本管理令牌：需要远程管理时才在 Render 面板里手动设置，绝不写进仓库
+      - key: ADMIN_TOKEN
+        sync: false
